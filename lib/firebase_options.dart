@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 void main() async {
-  // Ensures all Flutter services are initialized before Firebase
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase (auto-reads from google-services.json)
+  // Initialize Firebase manually (using google-services.json)
   await Firebase.initializeApp();
 
   runApp(const MyApp());
@@ -21,8 +20,8 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         appBar: AppBar(
-          title: const Text('Firebase Connection Test'),
           backgroundColor: Colors.blueAccent,
+          title: const Text('Firebase Connection Test'),
         ),
         body: const Center(
           child: Column(

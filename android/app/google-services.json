@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "486986126712",
+    "project_id": "netcalling",
+    "storage_bucket": "netcalling.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:486986126712:android:fd1986c616c47641ea648d",
+        "android_client_info": {
+          "package_name": "com.example.netcalling"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAzB-C7cMRLqaTYpR8igeP3G19fQsywj8w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
