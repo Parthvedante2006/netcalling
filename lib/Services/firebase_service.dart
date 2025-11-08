@@ -39,16 +39,53 @@ class FirebaseService {
       if (uid == null) return 'Failed to create user';
 
       try {
-        await _firestore.collection('users').doc(uid).set({
+        // Wait a bit to ensure auth state is propagated
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // Double check auth state
+        final currentUser = _auth.currentUser;
+        print('Before Firestore write - currentUser: ${currentUser?.uid}, original uid: $uid');
+        
+        if (currentUser == null) {
+          print('Error: No current user before Firestore write');
+          return 'Error: Authentication state not ready';
+        }
+
+        final userData = {
           'uid': uid,
           'name': name.trim(),
           'username': username.trim(),
           'email': email.trim(),
           'createdAt': FieldValue.serverTimestamp(),
-          'status': 'online', // optional
-        });
+          'status': 'online',
+        };
+        print('Attempting to save user data: $userData');
+        
+        // First try to write with merge option
+        await _firestore.collection('users').doc(uid).set(
+          userData,
+          SetOptions(merge: true),
+        );
+        
+        // Verify the write by reading it back
+        final docSnapshot = await _firestore.collection('users').doc(uid).get();
+        if (!docSnapshot.exists) {
+          print('Error: Document not found after write!');
+          return 'Error: Failed to verify user data creation';
+        }
+        
+        final savedData = docSnapshot.data();
+        print('Verified saved data: $savedData');
+        
+        if (savedData?['username'] != username.trim()) {
+          print('Error: Username verification failed. Saved: ${savedData?['username']}, Expected: ${username.trim()}');
+          return 'Error: Username verification failed';
+        }
       } on FirebaseException catch (fe) {
         print('Firestore write failed (code=${fe.code}): ${fe.message}');
+        if (fe.code == 'permission-denied') {
+          print('Permission denied. Current auth state: ${_auth.currentUser?.uid}');
+        }
         return 'firestore_error:${fe.code}:${fe.message}';
       }
 

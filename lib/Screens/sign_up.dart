@@ -31,9 +31,12 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
     setState(() => _isLoading = true);
 
+    // Log the values being sent
+    print('Attempting signup with username: ${_usernameController.text}');
+    
     final result = await FirebaseService().signUpUser(
       name: _nameController.text,
-      username: _usernameController.text,
+      username: _usernameController.text.trim(),  // Ensure username is trimmed
       email: _emailController.text,
       password: _passwordController.text,
     );
