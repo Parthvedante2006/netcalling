@@ -5,6 +5,9 @@ class FirebaseService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  /// 🔹 Get current user (optional)
+  User? get currentUser => _auth.currentUser;
+
   /// 🔹 Create a new user account
   Future<String> signUpUser({
     required String name,
@@ -28,7 +31,7 @@ class FirebaseService {
         email: email.trim(),
         password: password.trim(),
       );
-      
+
       await Future.delayed(const Duration(seconds: 1));
       // Step 3️⃣: Save user info to Firestore
       final uid = cred.user?.uid;
@@ -41,12 +44,10 @@ class FirebaseService {
           'name': name.trim(),
           'username': username.trim(),
           'email': email.trim(),
-          // use server timestamp so security rules and ordering are consistent
           'createdAt': FieldValue.serverTimestamp(),
-          'status': 'online', // optional: for presence
+          'status': 'online', // optional
         });
       } on FirebaseException catch (fe) {
-        // Log and return a clearer error so the UI/snackbars can show it
         print('Firestore write failed (code=${fe.code}): ${fe.message}');
         return 'firestore_error:${fe.code}:${fe.message}';
       }
@@ -66,5 +67,31 @@ class FirebaseService {
     } catch (e) {
       return 'Error: ${e.toString()}';
     }
+  }
+
+  /// 🔹 Login user using username + password
+  Future<String> loginUser({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      await _auth.signInWithEmailAndPassword(email: email, password: password);
+      return 'success';
+    } on FirebaseAuthException catch (e) {
+      return e.message ?? 'Login failed';
+    } catch (e) {
+      return 'Login failed: ${e.toString()}';
+    }
+  }
+
+  /// 🔹 Get user document by username (needed for login)
+  Future<DocumentSnapshot<Map<String, dynamic>>?> getUserByUsername(String username) async {
+    final snapshot = await _firestore
+        .collection('users')
+        .where('username', isEqualTo: username)
+        .get();
+
+    if (snapshot.docs.isEmpty) return null;
+    return snapshot.docs.first;
   }
 }

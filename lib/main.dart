@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'Screens/sign_up.dart';
+import 'package:netcalling/Screens/login.dart';
 
 void main() async {
   // Ensures all Flutter services are initialized before Firebase
@@ -24,7 +24,7 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         useMaterial3: true,
       ),
-      home: const SignUpScreen(),
+      home: const LoginScreen(),
     );
   }
 }
