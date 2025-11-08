@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'sections/contacts_screen.dart';
 import 'sections/chats_screen.dart';
 import 'sections/call_history_screen.dart';
+import '../Services/call_service.dart';
+import '../Services/firebase_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -12,12 +14,32 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  final CallService _callService = CallService();
   
   final List<Widget> _screens = [
     const ContactsScreen(),
     const ChatsScreen(),
     const CallHistoryScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeCallService();
+  }
+
+  Future<void> _initializeCallService() async {
+    final currentUser = FirebaseService().currentUser;
+    if (currentUser != null) {
+      _callService.initialize(currentUser.uid, context);
+    }
+  }
+
+  @override
+  void dispose() {
+    _callService.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

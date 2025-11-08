@@ -34,6 +34,7 @@ dependencies:
   firebase_core: ^4.2.1
   firebase_auth: ^6.1.2
   cloud_firestore: ^6.1.0
+  flutter_webrtc: ^1.2.0
   google_fonts: ^6.2.1
 
 

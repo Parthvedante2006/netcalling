@@ -45,5 +45,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs access to camera for video calls</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs access to microphone for voice calls</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app needs access to bluetooth for audio devices</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app needs access to local network for WebRTC connections</string>
 </dict>
 </plist>
