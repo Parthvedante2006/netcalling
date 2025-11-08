@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:netcalling/Screens/sign_up.dart';
+import 'package:netcalling/Screens/home_screen.dart';
 import 'package:netcalling/Services/firebase_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -74,7 +75,11 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("✅ Login successful")),
       );
-      // TODO: Navigate to Home/Dashboard
+      // Navigate to HomeScreen and remove all previous routes
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("❌ $result")),
