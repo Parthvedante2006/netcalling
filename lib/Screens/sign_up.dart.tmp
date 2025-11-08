@@ -26,37 +26,36 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   Future<void> _onSignUp() async {
-  if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) return;
 
-  setState(() => _isLoading = true);
+    setState(() => _isLoading = true);
 
-  final result = await FirebaseService().signUpUser(
-    name: _nameController.text,
-    username: _usernameController.text,
-    email: _emailController.text,
-    password: _passwordController.text,
-  );
-
-  if (!mounted) return;
-  setState(() => _isLoading = false);
-
-  if (result == 'success') {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("✅ Account created successfully!")),
+    final result = await FirebaseService().signUpUser(
+      name: _nameController.text,
+      username: _usernameController.text,
+      email: _emailController.text,
+      password: _passwordController.text,
     );
 
-    // Navigate to Home or Login
-    // Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-  } else {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("❌ $result")),
-    );
+    setState(() => _isLoading = false);
+
+    if (result == 'success') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("✅ Account created successfully!")),
+      );
+
+      // Navigate to Home or Login
+      // Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("❌ $result")),
+      );
+    }
   }
-}
 
-  @override
   @override
   Widget build(BuildContext context) {
     return Scaffold(
