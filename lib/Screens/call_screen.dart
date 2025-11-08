@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class CallScreen extends StatefulWidget {
   final String callerId;
@@ -44,37 +45,111 @@ class _CallScreenState extends State<CallScreen> {
   Timer? _durationTimer;
   String _callDuration = '00:00';
 
+  Future<bool> _requestMicrophonePermission() async {
+    final status = await Permission.microphone.request();
+    return status.isGranted;
+  }
+
   @override
   void initState() {
     super.initState();
-    _startCall();
+    _requestPermissions();
+  }
+
+  Future<void> _requestPermissions() async {
+    try {
+      final status = await Permission.microphone.request();
+      if (status.isGranted) {
+        _startCall();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission is required for calls')),
+          );
+          Navigator.of(context).pop();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error requesting permissions: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to request microphone permission')),
+        );
+        Navigator.of(context).pop();
+      }
+    }
   }
 
   Future<void> _startCall() async {
-    // Get user media - audio only for voice calls
-    final Map<String, dynamic> mediaConstraints = {
-      'audio': true,
-      'video': false,
-    };
+    // Request microphone permission first
+    final hasPermission = await _requestMicrophonePermission();
+    if (!hasPermission) {
+      throw Exception('Microphone permission denied');
+    }
 
     try {
+      // Get user media - audio only for voice calls
+      final Map<String, dynamic> mediaConstraints = {
+        'audio': true,
+        'video': false,
+      };
+
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      // Create peer connection
+      
+      // Verify audio tracks
+      final audioTracks = _localStream?.getAudioTracks();
+      debugPrint('Audio tracks: ${audioTracks?.length}');
+      if (audioTracks?.isEmpty ?? true) {
+        throw Exception('No audio track available');
+      }
+      debugPrint('Audio track enabled: ${audioTracks!.first.enabled}');
+
+      // Create peer connection with audio configuration
       final configuration = {
         'iceServers': [
           {'urls': 'stun:stun.l.google.com:19302'},
+        ],
+        'sdpSemantics': 'unified-plan',
+        'mandatory': {
+          'OfferToReceiveAudio': true,
+          'OfferToReceiveVideo': false
+        },
+        'optional': [
+          {'DtlsSrtpKeyAgreement': true},
         ]
       };
       _peerConnection = await createPeerConnection(configuration);
 
-      // Add local tracks
-      _localStream?.getTracks().forEach((track) {
-        _peerConnection?.addTrack(track, _localStream!);
-      });
+      // Add local audio track and set up transceivers
+      final tracks = _localStream?.getAudioTracks() ?? [];
+      final audioTrack = tracks.isNotEmpty ? tracks.first : null;
+      if (audioTrack != null) {
+        debugPrint('Adding audio track: enabled=${audioTrack.enabled}');
+        final sender = await _peerConnection?.addTrack(audioTrack, _localStream!);
+        debugPrint('Audio sender added: ${sender != null}');
+        
+        // Ensure audio is enabled
+        audioTrack.enabled = true;
+      } else {
+        debugPrint('No audio track available!');
+      }
 
       // Remote stream
       _peerConnection?.onTrack = (event) {
+        debugPrint('onTrack: ${event.track.kind}, streams: ${event.streams.length}');
         if (event.streams.isNotEmpty) {
+          final stream = event.streams[0];
+          debugPrint('Remote stream audio tracks: ${stream.getAudioTracks().length}');
+          
+          // Ensure audio is properly routed
+          if (event.track.kind == 'audio') {
+            event.track.enabled = true;
+            final audioTracks = stream.getAudioTracks();
+            if (audioTracks.isNotEmpty) {
+              audioTracks.first.enabled = true;
+            }
+          }
+          
           _startCallTimer();
           setState(() => _inCalling = true);
         }
@@ -192,9 +267,11 @@ class _CallScreenState extends State<CallScreen> {
 
     } catch (e) {
       debugPrint('Error handling incoming call: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to answer call: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to answer call: $e')),
+        );
+      }
       _hangUp();
     }
   }
@@ -206,8 +283,15 @@ class _CallScreenState extends State<CallScreen> {
       // Start call timeout
       _startCallTimeout();
 
-      // Create offer
-      final offer = await _peerConnection!.createOffer();
+      // Create offer with audio preferences
+      final offer = await _peerConnection!.createOffer({
+        'mandatory': {
+          'OfferToReceiveAudio': true,
+          'OfferToReceiveVideo': false,
+        },
+      });
+
+      debugPrint('Created offer: ${offer.sdp}');
       await _peerConnection!.setLocalDescription(offer);
 
       // Save offer to call doc
@@ -293,9 +377,24 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  Future<void> _checkAudioState() async {
+    if (_localStream == null) {
+      debugPrint('No local stream available');
+      return;
+    }
+
+    final audioTracks = _localStream!.getAudioTracks();
+    debugPrint('Audio track count: ${audioTracks.length}');
+    
+    for (final track in audioTracks) {
+      debugPrint('Audio track: enabled=${track.enabled}, muted=${track.muted}, kind=${track.kind}');
+    }
+  }
+
   void _startCallTimer() {
     _callStartTime = DateTime.now();
     _durationTimer?.cancel();
+    _checkAudioState(); // Check audio state when call starts
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       final duration = DateTime.now().difference(_callStartTime!);
@@ -307,7 +406,11 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
+  bool _isHangingUp = false;
+
   Future<void> _hangUp() async {
+    if (_isHangingUp) return;
+    _isHangingUp = true;
     _durationTimer?.cancel();
     try {
       if (_callDocId != null) {
@@ -367,7 +470,7 @@ class _CallScreenState extends State<CallScreen> {
                     width: 120,
                     height: 120,
                     decoration: BoxDecoration(
-                      color: Theme.of(context).primaryColor.withOpacity(0.2),
+                      color: Theme.of(context).primaryColor.withAlpha(51),
                       shape: BoxShape.circle,
                     ),
                     child: Center(
@@ -418,7 +521,7 @@ class _CallScreenState extends State<CallScreen> {
             Container(
               padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.5),
+                color: Colors.black.withAlpha(128),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
               ),
               child: Row(
@@ -466,7 +569,27 @@ class _CallScreenState extends State<CallScreen> {
                     isActive: _isSpeakerOn,
                     onPressed: () {
                       setState(() => _isSpeakerOn = !_isSpeakerOn);
-                      // TODO: Implement actual speaker toggle
+                      if (_peerConnection != null) {
+                        final audioTrack = _localStream?.getAudioTracks().first;
+                        if (audioTrack != null) {
+                          final constraints = {
+                            'audio': {
+                              'echoCancellation': true,
+                              'noiseSuppression': true,
+                              'autoGainControl': true,
+                              'googAutoGainControl': true,
+                              'googAutoGainControl2': true,
+                              'googEchoCancellation': true,
+                              'googEchoCancellation2': true,
+                              'googNoiseSuppression': true,
+                              'googNoiseSuppression2': true,
+                              'googHighpassFilter': true,
+                              'googAudioMirroring': _isSpeakerOn,
+                            }
+                          };
+                          audioTrack.applyConstraints(constraints);
+                        }
+                      }
                     },
                   ),
                 ],
@@ -489,7 +612,7 @@ class _CallScreenState extends State<CallScreen> {
       children: [
         Container(
           decoration: BoxDecoration(
-            color: isActive ? Colors.white.withOpacity(0.3) : Colors.transparent,
+              color: isActive ? Colors.white.withAlpha(77) : Colors.transparent,
             shape: BoxShape.circle,
           ),
           child: Material(
