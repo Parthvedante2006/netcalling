@@ -221,19 +221,36 @@ class _CallScreenState extends State<CallScreen> {
       debugPrint('Creating peer connection...');
       _peerConnection = await createPeerConnection(configuration);
 
-      // Add local audio track to peer connection - this also sets up receiving capability
+      // CRITICAL: Add local audio track to peer connection - this also sets up receiving capability
       final audioTrack = audioTracks.first;
       debugPrint('Adding audio track to peer connection...');
+      
+      // Ensure track is enabled before adding
+      audioTrack.enabled = true;
+      
+      // Add track to peer connection
       final rtpSender = await _peerConnection?.addTrack(audioTrack, _localStream!);
       debugPrint('RTP Sender created: ${rtpSender != null}');
       
       if (rtpSender != null) {
         debugPrint('Audio track successfully added to peer connection');
+        // Verify the track is still enabled after adding
+        if (!audioTrack.enabled) {
+          debugPrint('WARNING: Track disabled after addTrack - re-enabling');
+          audioTrack.enabled = true;
+        }
       } else {
-        debugPrint('WARNING: RTP Sender is null - audio track may not be added');
+        debugPrint('ERROR: RTP Sender is null - audio track may not be added!');
+        // Try alternative method if addTrack fails
+        try {
+          await _peerConnection?.addStream(_localStream!);
+          debugPrint('Added stream as fallback method');
+        } catch (e) {
+          debugPrint('Fallback addStream also failed: $e');
+        }
       }
       
-      // Configure audio track
+      // CRITICAL: Configure audio track - ensure it's enabled
       audioTrack.enabled = true;
       try {
         await audioTrack.applyConstraints({
@@ -253,63 +270,86 @@ class _CallScreenState extends State<CallScreen> {
           final stream = event.streams.first;
           
           // CRITICAL: Set remote stream to renderer FIRST (required for audio playback)
+          // Clear any existing stream first
+          if (_remoteRenderer.srcObject != null) {
+            _remoteRenderer.srcObject = null;
+            await Future.delayed(const Duration(milliseconds: 50));
+          }
+          
           _remoteRenderer.srcObject = stream;
           debugPrint('=== REMOTE STREAM SET TO RENDERER: ${stream.id} ===');
           
-          // Force renderer to play audio by setting it up properly
+          // CRITICAL: Initialize renderer (always try to initialize)
           try {
             await _remoteRenderer.initialize();
             debugPrint('Remote renderer initialized successfully');
           } catch (e) {
             debugPrint('Renderer initialization: $e');
-            // Try to re-initialize
+            // Try to re-initialize even if it throws an error
             try {
+              await Future.delayed(const Duration(milliseconds: 50));
               await _remoteRenderer.initialize();
-              debugPrint('Remote renderer re-initialized');
+              debugPrint('Remote renderer re-initialized after delay');
             } catch (e2) {
               debugPrint('Renderer re-initialization failed: $e2');
+              // Continue anyway - renderer might still work
             }
           }
           
+          // CRITICAL: Set srcObject again after initialization to ensure it's properly attached
+          _remoteRenderer.srcObject = stream;
+          
           // CRITICAL: Small delay to ensure renderer is ready before enabling tracks
-          await Future.delayed(const Duration(milliseconds: 150));
+          await Future.delayed(const Duration(milliseconds: 200));
           
           // Configure remote audio track - CRITICAL for audio playback
           final audioTracks = stream.getAudioTracks();
           debugPrint('=== FOUND ${audioTracks.length} REMOTE AUDIO TRACK(S) ===');
           
+          if (audioTracks.isEmpty) {
+            debugPrint('ERROR: No audio tracks in remote stream!');
+            return;
+          }
+          
+          // CRITICAL: Enable tracks multiple times with delays to ensure they stick
+          for (var i = 0; i < 3; i++) {
           for (var track in audioTracks) {
-            // Force enable multiple times to ensure it sticks
             track.enabled = true;
-            await Future.delayed(const Duration(milliseconds: 10));
-            track.enabled = true;
-            debugPrint('>>> REMOTE AUDIO TRACK ENABLED: ${track.id}, enabled=${track.enabled}, muted=${track.muted}');
-            
-            // Verify it's actually enabled
-            if (!track.enabled) {
-              debugPrint('ERROR: Remote track ${track.id} is still disabled - forcing enable again!');
-              track.enabled = true;
+              debugPrint('>>> REMOTE AUDIO TRACK ENABLED (attempt ${i + 1}): ${track.id}, enabled=${track.enabled}, muted=${track.muted}');
+            }
+            if (i < 2) {
+              await Future.delayed(const Duration(milliseconds: 20));
             }
           }
           
-          // Double-check all tracks are enabled
+          // Verify all tracks are enabled
           await Future.delayed(const Duration(milliseconds: 50));
           for (var track in audioTracks) {
             if (!track.enabled) {
-              debugPrint('WARNING: Track ${track.id} disabled after initial enable - re-enabling');
+              debugPrint('ERROR: Track ${track.id} still disabled after multiple attempts - forcing enable!');
+              track.enabled = true;
+              await Future.delayed(const Duration(milliseconds: 10));
               track.enabled = true;
             }
+            debugPrint('Final track state: ${track.id} - enabled=${track.enabled}, muted=${track.muted}');
+          }
+          
+          // CRITICAL: Ensure renderer has the stream and is ready
+          if (_remoteRenderer.srcObject != stream) {
+            debugPrint('WARNING: Renderer srcObject mismatch - resetting');
+          _remoteRenderer.srcObject = stream;
+            await Future.delayed(const Duration(milliseconds: 50));
           }
           
           // CRITICAL: Configure audio output immediately and repeatedly
           Future<void> configureAudioOutput() async {
-            try {
-              await Helper.setSpeakerphoneOn(_isSpeakerOn);
+          try {
+            await Helper.setSpeakerphoneOn(_isSpeakerOn);
               debugPrint('Audio output configured: speaker=$_isSpeakerOn');
-            } on UnimplementedError catch (e, st) {
-              debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
-            } catch (e, st) {
-              debugPrint('Error configuring audio output: $e\n$st');
+          } on UnimplementedError catch (e, st) {
+            debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error configuring audio output: $e\n$st');
             }
           }
           
@@ -560,21 +600,51 @@ class _CallScreenState extends State<CallScreen> {
           debugPrint('Replaced a=recvonly with a=sendrecv in incoming offer');
         }
         
-        // Ensure m=audio line has sendrecv
-        final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
-        if (audioLineRegex.hasMatch(offerSdp)) {
-          final match = audioLineRegex.firstMatch(offerSdp);
+        // CRITICAL: Ensure m=audio line has sendrecv attribute
+        // Find the m=audio line and add a=sendrecv if not present
+        final audioLinePattern = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true);
+        if (audioLinePattern.hasMatch(offerSdp)) {
+          final match = audioLinePattern.firstMatch(offerSdp);
           if (match != null) {
-            final audioLine = match.group(0)!;
-            if (!audioLine.contains('sendrecv') && !offerSdp.contains('a=sendrecv')) {
-              // Add sendrecv attribute after the m=audio line
-              final insertPos = match.end;
-              offerSdp = offerSdp.substring(0, insertPos) + 
+            final audioLineEnd = match.end;
+            // Check if a=sendrecv already exists after this line
+            final afterAudioLine = offerSdp.substring(audioLineEnd);
+            if (!afterAudioLine.contains('a=sendrecv') && !afterAudioLine.contains('a=sendonly') && !afterAudioLine.contains('a=recvonly')) {
+              // Insert a=sendrecv right after m=audio line
+              offerSdp = offerSdp.substring(0, audioLineEnd) + 
                         '\r\na=sendrecv' + 
-                        offerSdp.substring(insertPos);
+                        offerSdp.substring(audioLineEnd);
               debugPrint('Added a=sendrecv after m=audio line in incoming offer');
             }
           }
+        }
+        
+        // Also ensure there's at least one a=sendrecv in the SDP
+        if (!offerSdp.contains('a=sendrecv')) {
+          // Find first m=audio and add a=sendrecv after it
+          final firstAudioMatch = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true).firstMatch(offerSdp);
+          if (firstAudioMatch != null) {
+            offerSdp = offerSdp.substring(0, firstAudioMatch.end) + 
+                      '\r\na=sendrecv' + 
+                      offerSdp.substring(firstAudioMatch.end);
+            debugPrint('Force added a=sendrecv after first m=audio line in incoming offer');
+          } else {
+            // Last resort: add at the beginning of the media section
+            final mediaSectionMatch = RegExp(r'm=audio', multiLine: true).firstMatch(offerSdp);
+            if (mediaSectionMatch != null) {
+              offerSdp = offerSdp.substring(0, mediaSectionMatch.end) + 
+                        '\r\na=sendrecv' + 
+                        offerSdp.substring(mediaSectionMatch.end);
+              debugPrint('Added a=sendrecv after m=audio marker in incoming offer');
+            }
+          }
+        }
+        
+        // Final verification: ensure a=sendrecv exists
+        if (!offerSdp.contains('a=sendrecv')) {
+          debugPrint('WARNING: a=sendrecv still not found in incoming offer SDP after all attempts!');
+        } else {
+          debugPrint('SUCCESS: a=sendrecv confirmed in incoming offer SDP');
         }
         
         debugPrint('Modified incoming offer SDP length: ${offerSdp.length}');
@@ -627,21 +697,51 @@ class _CallScreenState extends State<CallScreen> {
         debugPrint('Replaced a=recvonly with a=sendrecv in answer');
       }
       
-      // Ensure m=audio line has sendrecv
-      final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
-      if (audioLineRegex.hasMatch(modifiedSdp)) {
-        final match = audioLineRegex.firstMatch(modifiedSdp);
+      // CRITICAL: Ensure m=audio line has sendrecv attribute
+      // Find the m=audio line and add a=sendrecv if not present
+      final audioLinePattern = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true);
+      if (audioLinePattern.hasMatch(modifiedSdp)) {
+        final match = audioLinePattern.firstMatch(modifiedSdp);
         if (match != null) {
-          final audioLine = match.group(0)!;
-          if (!audioLine.contains('sendrecv') && !modifiedSdp.contains('a=sendrecv')) {
-            // Add sendrecv attribute after the m=audio line
-            final insertPos = match.end;
-            modifiedSdp = modifiedSdp.substring(0, insertPos) + 
+          final audioLineEnd = match.end;
+          // Check if a=sendrecv already exists after this line
+          final afterAudioLine = modifiedSdp.substring(audioLineEnd);
+          if (!afterAudioLine.contains('a=sendrecv') && !afterAudioLine.contains('a=sendonly') && !afterAudioLine.contains('a=recvonly')) {
+            // Insert a=sendrecv right after m=audio line
+            modifiedSdp = modifiedSdp.substring(0, audioLineEnd) + 
                          '\r\na=sendrecv' + 
-                         modifiedSdp.substring(insertPos);
+                         modifiedSdp.substring(audioLineEnd);
             debugPrint('Added a=sendrecv after m=audio line in answer');
           }
         }
+      }
+      
+      // Also ensure there's at least one a=sendrecv in the SDP
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        // Find first m=audio and add a=sendrecv after it
+        final firstAudioMatch = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true).firstMatch(modifiedSdp);
+        if (firstAudioMatch != null) {
+          modifiedSdp = modifiedSdp.substring(0, firstAudioMatch.end) + 
+                       '\r\na=sendrecv' + 
+                       modifiedSdp.substring(firstAudioMatch.end);
+          debugPrint('Force added a=sendrecv after first m=audio line in answer');
+        } else {
+          // Last resort: add at the beginning of the media section
+          final mediaSectionMatch = RegExp(r'm=audio', multiLine: true).firstMatch(modifiedSdp);
+          if (mediaSectionMatch != null) {
+            modifiedSdp = modifiedSdp.substring(0, mediaSectionMatch.end) + 
+                         '\r\na=sendrecv' + 
+                         modifiedSdp.substring(mediaSectionMatch.end);
+            debugPrint('Added a=sendrecv after m=audio marker in answer');
+          }
+        }
+      }
+      
+      // Final verification: ensure a=sendrecv exists
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        debugPrint('WARNING: a=sendrecv still not found in answer SDP after all attempts!');
+      } else {
+        debugPrint('SUCCESS: a=sendrecv confirmed in answer SDP');
       }
       
       debugPrint('Modified answer SDP length: ${modifiedSdp.length}');
@@ -761,21 +861,51 @@ class _CallScreenState extends State<CallScreen> {
         debugPrint('Replaced a=recvonly with a=sendrecv in offer');
       }
       
-      // Ensure m=audio line has sendrecv
-      final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
-      if (audioLineRegex.hasMatch(modifiedSdp)) {
-        final match = audioLineRegex.firstMatch(modifiedSdp);
+      // CRITICAL: Ensure m=audio line has sendrecv attribute
+      // Find the m=audio line and add a=sendrecv if not present
+      final audioLinePattern = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true);
+      if (audioLinePattern.hasMatch(modifiedSdp)) {
+        final match = audioLinePattern.firstMatch(modifiedSdp);
         if (match != null) {
-          final audioLine = match.group(0)!;
-          if (!audioLine.contains('sendrecv') && !modifiedSdp.contains('a=sendrecv')) {
-            // Add sendrecv attribute after the m=audio line
-            final insertPos = match.end;
-            modifiedSdp = modifiedSdp.substring(0, insertPos) + 
+          final audioLineEnd = match.end;
+          // Check if a=sendrecv already exists after this line
+          final afterAudioLine = modifiedSdp.substring(audioLineEnd);
+          if (!afterAudioLine.contains('a=sendrecv') && !afterAudioLine.contains('a=sendonly') && !afterAudioLine.contains('a=recvonly')) {
+            // Insert a=sendrecv right after m=audio line
+            modifiedSdp = modifiedSdp.substring(0, audioLineEnd) + 
                          '\r\na=sendrecv' + 
-                         modifiedSdp.substring(insertPos);
+                         modifiedSdp.substring(audioLineEnd);
             debugPrint('Added a=sendrecv after m=audio line in offer');
           }
         }
+      }
+      
+      // Also ensure there's at least one a=sendrecv in the SDP
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        // Find first m=audio and add a=sendrecv after it
+        final firstAudioMatch = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true).firstMatch(modifiedSdp);
+        if (firstAudioMatch != null) {
+          modifiedSdp = modifiedSdp.substring(0, firstAudioMatch.end) + 
+                       '\r\na=sendrecv' + 
+                       modifiedSdp.substring(firstAudioMatch.end);
+          debugPrint('Force added a=sendrecv after first m=audio line in offer');
+        } else {
+          // Last resort: add at the beginning of the media section
+          final mediaSectionMatch = RegExp(r'm=audio', multiLine: true).firstMatch(modifiedSdp);
+          if (mediaSectionMatch != null) {
+            modifiedSdp = modifiedSdp.substring(0, mediaSectionMatch.end) + 
+                         '\r\na=sendrecv' + 
+                         modifiedSdp.substring(mediaSectionMatch.end);
+            debugPrint('Added a=sendrecv after m=audio marker in offer');
+          }
+        }
+      }
+      
+      // Final verification: ensure a=sendrecv exists
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        debugPrint('WARNING: a=sendrecv still not found in offer SDP after all attempts!');
+      } else {
+        debugPrint('SUCCESS: a=sendrecv confirmed in offer SDP');
       }
       
       debugPrint('Modified offer SDP length: ${modifiedSdp.length}');
@@ -846,21 +976,51 @@ class _CallScreenState extends State<CallScreen> {
               debugPrint('Replaced a=recvonly with a=sendrecv in incoming answer');
             }
             
-            // Ensure m=audio line has sendrecv
-            final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
-            if (audioLineRegex.hasMatch(answerSdp)) {
-              final match = audioLineRegex.firstMatch(answerSdp);
+            // CRITICAL: Ensure m=audio line has sendrecv attribute
+            // Find the m=audio line and add a=sendrecv if not present
+            final audioLinePattern = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true);
+            if (audioLinePattern.hasMatch(answerSdp)) {
+              final match = audioLinePattern.firstMatch(answerSdp);
               if (match != null) {
-                final audioLine = match.group(0)!;
-                if (!audioLine.contains('sendrecv') && !answerSdp.contains('a=sendrecv')) {
-                  // Add sendrecv attribute after the m=audio line
-                  final insertPos = match.end;
-                  answerSdp = answerSdp.substring(0, insertPos) + 
+                final audioLineEnd = match.end;
+                // Check if a=sendrecv already exists after this line
+                final afterAudioLine = answerSdp.substring(audioLineEnd);
+                if (!afterAudioLine.contains('a=sendrecv') && !afterAudioLine.contains('a=sendonly') && !afterAudioLine.contains('a=recvonly')) {
+                  // Insert a=sendrecv right after m=audio line
+                  answerSdp = answerSdp.substring(0, audioLineEnd) + 
                              '\r\na=sendrecv' + 
-                             answerSdp.substring(insertPos);
+                             answerSdp.substring(audioLineEnd);
                   debugPrint('Added a=sendrecv after m=audio line in incoming answer');
                 }
               }
+            }
+            
+            // Also ensure there's at least one a=sendrecv in the SDP
+            if (!answerSdp.contains('a=sendrecv')) {
+              // Find first m=audio and add a=sendrecv after it
+              final firstAudioMatch = RegExp(r'm=audio\s+\d+\s+[^\r\n]+', multiLine: true).firstMatch(answerSdp);
+              if (firstAudioMatch != null) {
+                answerSdp = answerSdp.substring(0, firstAudioMatch.end) + 
+                           '\r\na=sendrecv' + 
+                           answerSdp.substring(firstAudioMatch.end);
+                debugPrint('Force added a=sendrecv after first m=audio line in incoming answer');
+              } else {
+                // Last resort: add at the beginning of the media section
+                final mediaSectionMatch = RegExp(r'm=audio', multiLine: true).firstMatch(answerSdp);
+                if (mediaSectionMatch != null) {
+                  answerSdp = answerSdp.substring(0, mediaSectionMatch.end) + 
+                             '\r\na=sendrecv' + 
+                             answerSdp.substring(mediaSectionMatch.end);
+                  debugPrint('Added a=sendrecv after m=audio marker in incoming answer');
+                }
+              }
+            }
+            
+            // Final verification: ensure a=sendrecv exists
+            if (!answerSdp.contains('a=sendrecv')) {
+              debugPrint('WARNING: a=sendrecv still not found in incoming answer SDP after all attempts!');
+            } else {
+              debugPrint('SUCCESS: a=sendrecv confirmed in incoming answer SDP');
             }
             
             debugPrint('Modified incoming answer SDP length: ${answerSdp.length}');
@@ -1093,7 +1253,8 @@ class _CallScreenState extends State<CallScreen> {
       }
       
       if (_remoteRenderer.srcObject != null) {
-        final remoteTracks = _remoteRenderer.srcObject!.getAudioTracks();
+        final remoteStream = _remoteRenderer.srcObject!;
+        final remoteTracks = remoteStream.getAudioTracks();
         debugPrint('=== _ensureRemoteAudioPlaying: Found ${remoteTracks.length} remote audio track(s) ===');
         
         if (remoteTracks.isEmpty) {
@@ -1102,30 +1263,50 @@ class _CallScreenState extends State<CallScreen> {
         }
         
         // CRITICAL: Force enable ALL tracks multiple times and verify
+        for (var i = 0; i < 3; i++) {
+          for (var track in remoteTracks) {
+            track.enabled = true;
+            debugPrint('>>> Ensured remote audio track enabled (attempt ${i + 1}): ${track.id}, enabled=${track.enabled}');
+          }
+          if (i < 2) {
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
+        }
+        
+        // Verify all tracks are enabled
         for (var track in remoteTracks) {
-          final wasEnabled = track.enabled;
-          track.enabled = true; // Force enable
-          await Future.delayed(const Duration(milliseconds: 5));
-          track.enabled = true; // Double enable
-          debugPrint('>>> Ensured remote audio track enabled: ${track.id}');
-          debugPrint('   Was enabled: $wasEnabled, Now enabled: ${track.enabled}, muted: ${track.muted}');
-          
-          // Verify it's actually enabled - if not, force enable again
           if (!track.enabled) {
-            debugPrint('ERROR: Remote track ${track.id} is still disabled - forcing enable again!');
+            debugPrint('ERROR: Remote track ${track.id} still disabled after multiple attempts!');
             track.enabled = true;
             await Future.delayed(const Duration(milliseconds: 5));
             track.enabled = true;
           }
+          debugPrint('Final remote track state: ${track.id} - enabled=${track.enabled}, muted=${track.muted}');
         }
         
         // CRITICAL: Re-initialize renderer to ensure audio plays
         try {
+          // Store stream reference before re-initialization
+          final streamRef = remoteStream;
+          
+          // Try to re-initialize
           await _remoteRenderer.initialize();
           debugPrint('Renderer re-initialized in _ensureRemoteAudioPlaying');
+          
+          // Ensure srcObject is still set after initialization
+          if (_remoteRenderer.srcObject != streamRef) {
+            debugPrint('WARNING: Renderer srcObject changed after initialization - resetting');
+            _remoteRenderer.srcObject = streamRef;
+            await Future.delayed(const Duration(milliseconds: 50));
+          }
         } catch (e) {
           // Renderer might already be initialized, that's okay
           debugPrint('Renderer initialization check: $e');
+          // Ensure srcObject is still set
+          if (_remoteRenderer.srcObject == null) {
+            debugPrint('WARNING: Renderer srcObject is null in _ensureRemoteAudioPlaying');
+            _remoteRenderer.srcObject = remoteStream;
+          }
         }
         
         // Configure audio output
