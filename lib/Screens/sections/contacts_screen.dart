@@ -250,10 +250,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 ),
                 subtitle: Text(
-                  '@${_result!.data()?['username'] ?? ''}\n${_result!.data()?['email'] ?? ''}',
+                  '@${_result!.data()?['username'] ?? ''}',
                   style: TextStyle(color: Colors.grey[400]),
                 ),
-                isThreeLine: true,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

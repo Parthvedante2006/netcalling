@@ -68,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.grey[900],
         elevation: 0,
         title: const Text(
-          'NetCalling',
+          'WaveConnect',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w600,

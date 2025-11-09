@@ -1,4 +1,4 @@
-# NetCalling 📞
+# WaveConnect 📞
 
 A modern Flutter application for real-time voice communication using WebRTC, featuring user authentication, contact management, messaging, and call functionality.
 

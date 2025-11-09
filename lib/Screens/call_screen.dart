@@ -254,29 +254,49 @@ class _CallScreenState extends State<CallScreen> {
           
           // CRITICAL: Set remote stream to renderer FIRST (required for audio playback)
           _remoteRenderer.srcObject = stream;
-          debugPrint('Remote stream set to renderer: ${stream.id}');
+          debugPrint('=== REMOTE STREAM SET TO RENDERER: ${stream.id} ===');
           
           // Force renderer to play audio by setting it up properly
           try {
             await _remoteRenderer.initialize();
             debugPrint('Remote renderer initialized successfully');
           } catch (e) {
-            debugPrint('Renderer already initialized: $e');
+            debugPrint('Renderer initialization: $e');
+            // Try to re-initialize
+            try {
+              await _remoteRenderer.initialize();
+              debugPrint('Remote renderer re-initialized');
+            } catch (e2) {
+              debugPrint('Renderer re-initialization failed: $e2');
+            }
           }
           
           // CRITICAL: Small delay to ensure renderer is ready before enabling tracks
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 150));
           
           // Configure remote audio track - CRITICAL for audio playback
           final audioTracks = stream.getAudioTracks();
-          debugPrint('Found ${audioTracks.length} remote audio track(s)');
+          debugPrint('=== FOUND ${audioTracks.length} REMOTE AUDIO TRACK(S) ===');
+          
           for (var track in audioTracks) {
+            // Force enable multiple times to ensure it sticks
             track.enabled = true;
-            debugPrint('Remote audio track enabled: ${track.id}, enabled=${track.enabled}');
+            await Future.delayed(const Duration(milliseconds: 10));
+            track.enabled = true;
+            debugPrint('>>> REMOTE AUDIO TRACK ENABLED: ${track.id}, enabled=${track.enabled}, muted=${track.muted}');
             
-            // Ensure track is unmuted
-            if (track.muted != null) {
-              // Force enable the track
+            // Verify it's actually enabled
+            if (!track.enabled) {
+              debugPrint('ERROR: Remote track ${track.id} is still disabled - forcing enable again!');
+              track.enabled = true;
+            }
+          }
+          
+          // Double-check all tracks are enabled
+          await Future.delayed(const Duration(milliseconds: 50));
+          for (var track in audioTracks) {
+            if (!track.enabled) {
+              debugPrint('WARNING: Track ${track.id} disabled after initial enable - re-enabling');
               track.enabled = true;
             }
           }
@@ -297,24 +317,45 @@ class _CallScreenState extends State<CallScreen> {
           await configureAudioOutput();
           
           // Re-configure audio routing multiple times to ensure it works
-          for (var delay in [100, 300, 500, 1000, 2000]) {
+          for (var delay in [200, 500, 1000, 2000, 3000]) {
             Future.delayed(Duration(milliseconds: delay), () async {
               if (!mounted || _isHangingUp) return;
               
               try {
                 // CRITICAL: Re-enable ALL remote audio tracks (not just disabled ones)
                 final currentStream = _remoteRenderer.srcObject ?? stream;
+                if (currentStream == null) {
+                  debugPrint('WARNING: No remote stream available at ${delay}ms');
+                  return;
+                }
+                
                 final tracks = currentStream.getAudioTracks();
-                debugPrint('Re-checking ${tracks.length} remote audio track(s) at ${delay}ms');
+                debugPrint('=== Re-checking ${tracks.length} remote audio track(s) at ${delay}ms ===');
                 
                 for (var track in tracks) {
                   // Force enable every time to ensure it stays enabled
+                  final wasEnabled = track.enabled;
                   track.enabled = true;
-                  debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}, enabled=${track.enabled}');
+                  await Future.delayed(const Duration(milliseconds: 5));
+                  track.enabled = true; // Double enable
+                  debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}, was=$wasEnabled, now=${track.enabled}');
+                  
+                  // Verify
+                  if (!track.enabled) {
+                    debugPrint('ERROR: Track ${track.id} still disabled after re-enable at ${delay}ms!');
+                    track.enabled = true;
+                  }
                 }
                 
                 // Re-configure audio output
                 await configureAudioOutput();
+                
+                // Re-initialize renderer if needed
+                try {
+                  await _remoteRenderer.initialize();
+                } catch (e) {
+                  // Renderer might already be initialized
+                }
               } catch (e) {
                 debugPrint('Error in delayed audio setup at ${delay}ms: $e');
               }
@@ -405,7 +446,7 @@ class _CallScreenState extends State<CallScreen> {
       _peerConnection?.onConnectionState = (state) {
         debugPrint('Connection state: $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-          debugPrint('=== WebRTC connection established - ensuring audio playback ===');
+          debugPrint('=== WebRTC CONNECTION ESTABLISHED - ENSURING AUDIO PLAYBACK ===');
           
           // CRITICAL: Ensure local audio tracks are enabled and sending
           if (_localStream != null) {
@@ -421,14 +462,30 @@ class _CallScreenState extends State<CallScreen> {
                 track.enabled = true;
               }
             }
+            
+            // Double-check after a small delay
+            Future.delayed(const Duration(milliseconds: 50), () {
+              if (_localStream != null) {
+                for (var track in _localStream!.getAudioTracks()) {
+                  if (!track.enabled && !_isMuted) {
+                    track.enabled = true;
+                    debugPrint('>>> Re-enabled local track after delay: ${track.id}');
+                  }
+                }
+              }
+            });
           } else {
             debugPrint('ERROR: Local stream is null after connection!');
           }
           
-          // CRITICAL: Ensure remote audio is playing - check multiple times
-          for (var delay in [300, 800, 1500, 2500]) {
-            Future.delayed(Duration(milliseconds: delay), () {
-              _ensureRemoteAudioPlaying();
+          // CRITICAL: Ensure remote audio is playing - check multiple times with delays
+          Future.delayed(const Duration(milliseconds: 200), () async {
+            await _ensureRemoteAudioPlaying();
+          });
+          
+          for (var delay in [500, 1000, 2000, 3000, 5000]) {
+            Future.delayed(Duration(milliseconds: delay), () async {
+              await _ensureRemoteAudioPlaying();
             });
           }
           
@@ -489,15 +546,38 @@ class _CallScreenState extends State<CallScreen> {
 
       debugPrint('Setting remote description from offer...');
       try {
-        // Modify offer SDP to ensure audio is properly configured
+        // CRITICAL: Modify offer SDP to ensure audio is properly configured for bidirectional communication
         String offerSdp = offer['sdp'] ?? '';
-        // Ensure audio direction allows sending and receiving
-        if (offerSdp.contains('a=recvonly') && !offerSdp.contains('a=sendrecv')) {
-          offerSdp = offerSdp.replaceAll('a=recvonly', 'a=sendrecv');
-        }
-        if (offerSdp.contains('a=sendonly') && !offerSdp.contains('a=sendrecv')) {
+        debugPrint('Original incoming offer SDP length: ${offerSdp.length}');
+        
+        // Replace all restrictive audio directions with sendrecv
+        if (offerSdp.contains('a=sendonly')) {
           offerSdp = offerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+          debugPrint('Replaced a=sendonly with a=sendrecv in incoming offer');
         }
+        if (offerSdp.contains('a=recvonly')) {
+          offerSdp = offerSdp.replaceAll('a=recvonly', 'a=sendrecv');
+          debugPrint('Replaced a=recvonly with a=sendrecv in incoming offer');
+        }
+        
+        // Ensure m=audio line has sendrecv
+        final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
+        if (audioLineRegex.hasMatch(offerSdp)) {
+          final match = audioLineRegex.firstMatch(offerSdp);
+          if (match != null) {
+            final audioLine = match.group(0)!;
+            if (!audioLine.contains('sendrecv') && !offerSdp.contains('a=sendrecv')) {
+              // Add sendrecv attribute after the m=audio line
+              final insertPos = match.end;
+              offerSdp = offerSdp.substring(0, insertPos) + 
+                        '\r\na=sendrecv' + 
+                        offerSdp.substring(insertPos);
+              debugPrint('Added a=sendrecv after m=audio line in incoming offer');
+            }
+          }
+        }
+        
+        debugPrint('Modified incoming offer SDP length: ${offerSdp.length}');
         
         final remoteDesc = RTCSessionDescription(offerSdp, offer['type']);
         await _peerConnection!.setRemoteDescription(remoteDesc);
@@ -533,16 +613,38 @@ class _CallScreenState extends State<CallScreen> {
         'offerToReceiveVideo': false,
       });
       
-      // Modify SDP to ensure audio is properly configured
+      // CRITICAL: Modify SDP to ensure audio is properly configured for bidirectional communication
       String modifiedSdp = answer.sdp ?? '';
-      // Ensure audio is not muted in SDP
+      debugPrint('Original answer SDP length: ${modifiedSdp.length}');
+      
+      // Replace all restrictive audio directions with sendrecv
       if (modifiedSdp.contains('a=sendonly')) {
         modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
+        debugPrint('Replaced a=sendonly with a=sendrecv in answer');
       }
-      if (modifiedSdp.contains('a=recvonly') && !modifiedSdp.contains('a=sendrecv')) {
-        // Ensure we can both send and receive audio
+      if (modifiedSdp.contains('a=recvonly')) {
         modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+        debugPrint('Replaced a=recvonly with a=sendrecv in answer');
       }
+      
+      // Ensure m=audio line has sendrecv
+      final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
+      if (audioLineRegex.hasMatch(modifiedSdp)) {
+        final match = audioLineRegex.firstMatch(modifiedSdp);
+        if (match != null) {
+          final audioLine = match.group(0)!;
+          if (!audioLine.contains('sendrecv') && !modifiedSdp.contains('a=sendrecv')) {
+            // Add sendrecv attribute after the m=audio line
+            final insertPos = match.end;
+            modifiedSdp = modifiedSdp.substring(0, insertPos) + 
+                         '\r\na=sendrecv' + 
+                         modifiedSdp.substring(insertPos);
+            debugPrint('Added a=sendrecv after m=audio line in answer');
+          }
+        }
+      }
+      
+      debugPrint('Modified answer SDP length: ${modifiedSdp.length}');
       
       final modifiedAnswer = RTCSessionDescription(modifiedSdp, answer.type);
       
@@ -645,14 +747,38 @@ class _CallScreenState extends State<CallScreen> {
         'offerToReceiveVideo': false,
       });
       
-      // Modify SDP to ensure audio is properly configured
+      // CRITICAL: Modify SDP to ensure audio is properly configured for bidirectional communication
       String modifiedSdp = offer.sdp ?? '';
-      // Ensure audio direction is sendrecv (send and receive)
-      if (!modifiedSdp.contains('a=sendrecv')) {
-        // Replace any restrictive audio directions
+      debugPrint('Original offer SDP length: ${modifiedSdp.length}');
+      
+      // Replace all restrictive audio directions with sendrecv
+      if (modifiedSdp.contains('a=sendonly')) {
         modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
-        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+        debugPrint('Replaced a=sendonly with a=sendrecv in offer');
       }
+      if (modifiedSdp.contains('a=recvonly')) {
+        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+        debugPrint('Replaced a=recvonly with a=sendrecv in offer');
+      }
+      
+      // Ensure m=audio line has sendrecv
+      final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
+      if (audioLineRegex.hasMatch(modifiedSdp)) {
+        final match = audioLineRegex.firstMatch(modifiedSdp);
+        if (match != null) {
+          final audioLine = match.group(0)!;
+          if (!audioLine.contains('sendrecv') && !modifiedSdp.contains('a=sendrecv')) {
+            // Add sendrecv attribute after the m=audio line
+            final insertPos = match.end;
+            modifiedSdp = modifiedSdp.substring(0, insertPos) + 
+                         '\r\na=sendrecv' + 
+                         modifiedSdp.substring(insertPos);
+            debugPrint('Added a=sendrecv after m=audio line in offer');
+          }
+        }
+      }
+      
+      debugPrint('Modified offer SDP length: ${modifiedSdp.length}');
       
       final modifiedOffer = RTCSessionDescription(modifiedSdp, offer.type);
       
@@ -706,12 +832,38 @@ class _CallScreenState extends State<CallScreen> {
           try {
             debugPrint('Setting remote description from answer...');
             
-            // Modify answer SDP to ensure audio is properly configured
+            // CRITICAL: Modify answer SDP to ensure audio is properly configured for bidirectional communication
             String answerSdp = answer['sdp'] ?? '';
-            // Ensure audio direction allows receiving
-            if (answerSdp.contains('a=sendonly') && !answerSdp.contains('a=sendrecv')) {
+            debugPrint('Original incoming answer SDP length: ${answerSdp.length}');
+            
+            // Replace all restrictive audio directions with sendrecv
+            if (answerSdp.contains('a=sendonly')) {
               answerSdp = answerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+              debugPrint('Replaced a=sendonly with a=sendrecv in incoming answer');
             }
+            if (answerSdp.contains('a=recvonly')) {
+              answerSdp = answerSdp.replaceAll('a=recvonly', 'a=sendrecv');
+              debugPrint('Replaced a=recvonly with a=sendrecv in incoming answer');
+            }
+            
+            // Ensure m=audio line has sendrecv
+            final audioLineRegex = RegExp(r'm=audio\s+\d+\s+.*');
+            if (audioLineRegex.hasMatch(answerSdp)) {
+              final match = audioLineRegex.firstMatch(answerSdp);
+              if (match != null) {
+                final audioLine = match.group(0)!;
+                if (!audioLine.contains('sendrecv') && !answerSdp.contains('a=sendrecv')) {
+                  // Add sendrecv attribute after the m=audio line
+                  final insertPos = match.end;
+                  answerSdp = answerSdp.substring(0, insertPos) + 
+                             '\r\na=sendrecv' + 
+                             answerSdp.substring(insertPos);
+                  debugPrint('Added a=sendrecv after m=audio line in incoming answer');
+                }
+              }
+            }
+            
+            debugPrint('Modified incoming answer SDP length: ${answerSdp.length}');
             
             final remoteDesc = RTCSessionDescription(answerSdp, answer['type']);
             await _peerConnection!.setRemoteDescription(remoteDesc);
@@ -929,25 +1081,40 @@ class _CallScreenState extends State<CallScreen> {
     if (!mounted || _isHangingUp) return;
     
     try {
+      // CRITICAL: Also ensure local audio is enabled
+      if (_localStream != null) {
+        final localTracks = _localStream!.getAudioTracks();
+        for (var track in localTracks) {
+          if (!track.enabled && !_isMuted) {
+            track.enabled = true;
+            debugPrint('>>> Re-enabled local audio track in _ensureRemoteAudioPlaying: ${track.id}');
+          }
+        }
+      }
+      
       if (_remoteRenderer.srcObject != null) {
         final remoteTracks = _remoteRenderer.srcObject!.getAudioTracks();
-        debugPrint('_ensureRemoteAudioPlaying: Found ${remoteTracks.length} remote audio track(s)');
+        debugPrint('=== _ensureRemoteAudioPlaying: Found ${remoteTracks.length} remote audio track(s) ===');
         
         if (remoteTracks.isEmpty) {
           debugPrint('WARNING: No remote audio tracks found in stream!');
           return;
         }
         
-        // CRITICAL: Force enable ALL tracks and verify
+        // CRITICAL: Force enable ALL tracks multiple times and verify
         for (var track in remoteTracks) {
           final wasEnabled = track.enabled;
           track.enabled = true; // Force enable
+          await Future.delayed(const Duration(milliseconds: 5));
+          track.enabled = true; // Double enable
           debugPrint('>>> Ensured remote audio track enabled: ${track.id}');
           debugPrint('   Was enabled: $wasEnabled, Now enabled: ${track.enabled}, muted: ${track.muted}');
           
           // Verify it's actually enabled - if not, force enable again
           if (!track.enabled) {
             debugPrint('ERROR: Remote track ${track.id} is still disabled - forcing enable again!');
+            track.enabled = true;
+            await Future.delayed(const Duration(milliseconds: 5));
             track.enabled = true;
           }
         }

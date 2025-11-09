@@ -237,10 +237,9 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                       ),
                       subtitle: Text(
-                        '@$contactUsername\n$contactEmail',
+                        '@$contactUsername',
                         style: TextStyle(color: Colors.grey[400]),
                       ),
-                      isThreeLine: true,
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
