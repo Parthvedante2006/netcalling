@@ -53,17 +53,23 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    // Initialize renderer first (synchronously)
     _initializeRenderer();
+    // Initialize audio settings
     _initializeAudio();
+    // Request permissions and start call
     _requestPermissions();
   }
 
   Future<void> _initializeAudio() async {
     try {
       // Set default audio settings - speaker on by default for calls
+      if (mounted) {
       setState(() => _isSpeakerOn = true);
+      }
       
       // Configure speakerphone - this is critical for audio playback
+      // Do this early to ensure audio routing is correct
       try {
         await Helper.setSpeakerphoneOn(true);
         debugPrint('Speakerphone initialized to ON');
@@ -154,18 +160,31 @@ class _CallScreenState extends State<CallScreen> {
         throw Exception('No audio track found');
       }
       
-      // Enable audio processing
+      // CRITICAL: Enable ALL local audio tracks immediately
+      debugPrint('Found ${audioTracks.length} local audio track(s)');
       for (var track in audioTracks) {
         track.enabled = true;
+        debugPrint('>>> Enabled local audio track: ${track.id}');
+        debugPrint('   Track enabled state: ${track.enabled}');
+        debugPrint('   Track muted: ${track.muted}');
+        
+        // Verify it's actually enabled
+        if (!track.enabled) {
+          debugPrint('ERROR: Local track ${track.id} is still disabled after enabling!');
+          track.enabled = true; // Force enable again
+        }
+        
         try {
           final settings = track.getSettings();
-          debugPrint('Audio track settings: $settings');
+          debugPrint('Local audio track settings: $settings');
         } on UnimplementedError catch (e, st) {
             debugPrint('getSettings not implemented on this platform: $e\n$st');
           } catch (e, st) {
             debugPrint('Error reading audio track settings: $e\n$st');
           }
       }
+
+      debugPrint('All local audio tracks enabled and configured');
 
       // Create peer connection with optimized configuration for audio
       final Map<String, dynamic> configuration = {
@@ -267,10 +286,18 @@ class _CallScreenState extends State<CallScreen> {
           
           // CRITICAL: Enable ALL remote audio tracks immediately
           for (var track in remoteAudioTracks) {
+            // CRITICAL: Enable the track FIRST
             track.enabled = true;
             debugPrint('>>> Enabled remote audio track: ${track.id}');
             debugPrint('   Track enabled state: ${track.enabled}');
             debugPrint('   Track muted: ${track.muted}');
+            
+            // Verify it's actually enabled
+            if (!track.enabled) {
+              debugPrint('ERROR: Track ${track.id} is still disabled after enabling!');
+              // Force enable again
+              track.enabled = true;
+            }
             
             // Monitor track state changes
             track.onEnded = () {
@@ -322,8 +349,8 @@ class _CallScreenState extends State<CallScreen> {
           
           // Set call as active
           if (mounted) {
-            _startCallTimer();
-            setState(() => _inCalling = true);
+          _startCallTimer();
+          setState(() => _inCalling = true);
             debugPrint('Call marked as active');
           }
           
@@ -395,16 +422,27 @@ class _CallScreenState extends State<CallScreen> {
       _peerConnection?.onConnectionState = (state) {
         debugPrint('Connection state: $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-          debugPrint('WebRTC connection established - ensuring audio playback');
-          // Ensure audio tracks are enabled
+          debugPrint('=== WebRTC connection established - ensuring audio playback ===');
+          
+          // CRITICAL: Ensure local audio tracks are enabled and sending
           if (_localStream != null) {
-            for (var track in _localStream!.getAudioTracks()) {
+            final localTracks = _localStream!.getAudioTracks();
+            debugPrint('Connection established: Found ${localTracks.length} local audio track(s)');
+            for (var track in localTracks) {
               track.enabled = !_isMuted;
-              debugPrint('Local audio track enabled after connection: ${track.id}');
+              debugPrint('>>> Local audio track enabled after connection: ${track.id}, enabled=${track.enabled}');
+              
+              // Verify it's enabled
+              if (!track.enabled && !_isMuted) {
+                debugPrint('WARNING: Local track ${track.id} is disabled - forcing enable!');
+                track.enabled = true;
+              }
             }
+          } else {
+            debugPrint('ERROR: Local stream is null after connection!');
           }
           
-          // Ensure remote audio is playing - check periodically for remote tracks
+          // CRITICAL: Ensure remote audio is playing
           Future.delayed(const Duration(milliseconds: 300), () {
             _ensureRemoteAudioPlaying();
           });
@@ -477,12 +515,22 @@ class _CallScreenState extends State<CallScreen> {
         _remoteDescSet = true; // Mark remote description as set for incoming calls
         debugPrint('Remote description set successfully from offer');
         
-        // Ensure local audio is enabled after setting remote description
+        // CRITICAL: Ensure local audio is enabled after setting remote description
         if (_localStream != null) {
-          for (var track in _localStream!.getAudioTracks()) {
+          final localTracks = _localStream!.getAudioTracks();
+          debugPrint('Incoming call: Found ${localTracks.length} local audio track(s)');
+          for (var track in localTracks) {
             track.enabled = !_isMuted;
-            debugPrint('Local audio track enabled after remote desc: ${track.id}');
+            debugPrint('>>> Local audio track enabled after remote desc: ${track.id}, enabled=${track.enabled}');
+            
+            // Verify it's enabled
+            if (!track.enabled && !_isMuted) {
+              debugPrint('WARNING: Local track ${track.id} is disabled - forcing enable!');
+              track.enabled = true;
+            }
           }
+        } else {
+          debugPrint('ERROR: Local stream is null in incoming call!');
         }
       } catch (e) {
         debugPrint('Error setting remote description from offer: $e');
@@ -505,19 +553,29 @@ class _CallScreenState extends State<CallScreen> {
         'answer': {'sdp': answer.sdp, 'type': answer.type},
         'state': 'answered',
       });
-      
-      // Ensure local audio is enabled
+
+      // CRITICAL: Ensure local audio is enabled after creating answer
       if (_localStream != null) {
-        for (var track in _localStream!.getAudioTracks()) {
+        final localTracks = _localStream!.getAudioTracks();
+        debugPrint('After answer: Found ${localTracks.length} local audio track(s)');
+        for (var track in localTracks) {
           track.enabled = !_isMuted;
-          debugPrint('Local audio track enabled after answer: ${track.id}');
+          debugPrint('>>> Local audio track enabled after answer: ${track.id}, enabled=${track.enabled}');
+          
+          // Verify it's enabled
+          if (!track.enabled && !_isMuted) {
+            debugPrint('WARNING: Local track ${track.id} is disabled after answer - forcing enable!');
+            track.enabled = true;
+          }
         }
+      } else {
+        debugPrint('ERROR: Local stream is null after creating answer!');
       }
       
       // Configure audio output
       try {
         await Helper.setSpeakerphoneOn(_isSpeakerOn);
-        debugPrint('Audio output configured after answer');
+        debugPrint('Audio output configured after answer: speaker=$_isSpeakerOn');
       } catch (e) {
         debugPrint('Error setting audio output after answer: $e');
       }
@@ -589,12 +647,22 @@ class _CallScreenState extends State<CallScreen> {
       await _peerConnection!.setLocalDescription(offer);
       debugPrint('Local description set successfully');
       
-      // Ensure local audio is enabled
+      // CRITICAL: Ensure local audio is enabled after creating offer
       if (_localStream != null) {
-        for (var track in _localStream!.getAudioTracks()) {
+        final localTracks = _localStream!.getAudioTracks();
+        debugPrint('After offer: Found ${localTracks.length} local audio track(s)');
+        for (var track in localTracks) {
           track.enabled = !_isMuted;
-          debugPrint('Local audio track enabled after offer: ${track.id}');
+          debugPrint('>>> Local audio track enabled after offer: ${track.id}, enabled=${track.enabled}');
+          
+          // Verify it's enabled
+          if (!track.enabled && !_isMuted) {
+            debugPrint('WARNING: Local track ${track.id} is disabled after offer - forcing enable!');
+            track.enabled = true;
+          }
         }
+      } else {
+        debugPrint('ERROR: Local stream is null after creating offer!');
       }
 
       final callData = {
@@ -631,18 +699,28 @@ class _CallScreenState extends State<CallScreen> {
             _remoteDescSet = true;
             debugPrint('Remote description set successfully from answer');
             
-            // After setting remote description, ensure audio tracks are enabled
+            // CRITICAL: After setting remote description, ensure local audio tracks are enabled
             if (_localStream != null) {
-              for (var track in _localStream!.getAudioTracks()) {
+              final localTracks = _localStream!.getAudioTracks();
+              debugPrint('After remote desc (outgoing): Found ${localTracks.length} local audio track(s)');
+              for (var track in localTracks) {
                 track.enabled = !_isMuted;
-                debugPrint('Local audio track enabled after remote desc: ${track.id}');
+                debugPrint('>>> Local audio track enabled after remote desc: ${track.id}, enabled=${track.enabled}');
+                
+                // Verify it's enabled
+                if (!track.enabled && !_isMuted) {
+                  debugPrint('WARNING: Local track ${track.id} is disabled - forcing enable!');
+                  track.enabled = true;
+                }
               }
+            } else {
+              debugPrint('ERROR: Local stream is null after setting remote description!');
             }
             
             // Configure audio output immediately
             try {
               await Helper.setSpeakerphoneOn(_isSpeakerOn);
-              debugPrint('Audio output configured after remote desc');
+              debugPrint('Audio output configured after remote desc: speaker=$_isSpeakerOn');
             } catch (e) {
               debugPrint('Error setting speaker: $e');
             }
@@ -651,7 +729,7 @@ class _CallScreenState extends State<CallScreen> {
             Future.delayed(const Duration(milliseconds: 500), () {
               if (mounted && !_isHangingUp) {
                 _ensureRemoteAudioPlaying();
-                setState(() => _inCalling = true);
+            setState(() => _inCalling = true);
                 _startCallTimer();
               }
             });
@@ -834,25 +912,36 @@ class _CallScreenState extends State<CallScreen> {
     try {
       if (_remoteRenderer.srcObject != null) {
         final remoteTracks = _remoteRenderer.srcObject!.getAudioTracks();
-        debugPrint('_ensureRemoteAudioPlaying: Found ${remoteTracks.length} remote audio tracks');
+        debugPrint('_ensureRemoteAudioPlaying: Found ${remoteTracks.length} remote audio track(s)');
+        
+        if (remoteTracks.isEmpty) {
+          debugPrint('WARNING: No remote audio tracks found in stream!');
+          return;
+        }
         
         for (var track in remoteTracks) {
-          if (!track.enabled) {
-            debugPrint('WARNING: Remote track ${track.id} was disabled - enabling now!');
-          }
+          final wasEnabled = track.enabled;
           track.enabled = true;
-          debugPrint('Ensured remote audio track enabled: ${track.id}');
+          debugPrint('>>> Ensured remote audio track enabled: ${track.id}');
+          debugPrint('   Was enabled: $wasEnabled, Now enabled: ${track.enabled}');
+          
+          // Verify it's actually enabled
+          if (!track.enabled) {
+            debugPrint('ERROR: Remote track ${track.id} is still disabled after enabling!');
+            // Force enable again
+            track.enabled = true;
+          }
         }
         
         // Configure audio output
         try {
           await Helper.setSpeakerphoneOn(_isSpeakerOn);
-          debugPrint('Audio output reconfigured');
+          debugPrint('Audio output reconfigured: speaker=$_isSpeakerOn');
         } catch (e) {
           debugPrint('Error setting audio output: $e');
         }
       } else {
-        debugPrint('_ensureRemoteAudioPlaying: No remote stream yet');
+        debugPrint('_ensureRemoteAudioPlaying: No remote stream yet - waiting for onTrack event');
       }
     } catch (e) {
       debugPrint('Error in _ensureRemoteAudioPlaying: $e');
