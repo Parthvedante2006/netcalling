@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import '../../Services/firebase_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'chat_screen.dart';
 import '../call_screen.dart';
+import '../../Services/firebase_service.dart';
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -41,7 +42,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     try {
       final snapshot = await FirebaseService().getUserByUsername(query);
-      if (snapshot == null) {
+
+      if (snapshot == null || !snapshot.exists) {
         setState(() {
           _error = 'No user found for "$query"';
           _isLoading = false;
@@ -59,6 +61,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  String _generateChatId(String uid1, String uid2) {
+    return uid1.hashCode <= uid2.hashCode ? '$uid1-$uid2' : '$uid2-$uid1';
   }
 
   @override
@@ -85,10 +91,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 onPressed: _isLoading ? null : _doSearch,
                 child: _isLoading
                     ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
                     : const Text('Search'),
               ),
             ],
@@ -103,38 +109,63 @@ class _ContactsScreenState extends State<ContactsScreen> {
             Card(
               child: ListTile(
                 leading: const CircleAvatar(child: Icon(Icons.person)),
-                title: Text(_result!['name'] ?? 'No name'),
-                subtitle: Text('@${_result!['username'] ?? ''}\n${_result!['email'] ?? ''}'),
+                title: Text(_result!.data()?['name'] ?? 'No name'),
+                subtitle: Text(
+                  '@${_result!.data()?['username'] ?? ''}\n${_result!.data()?['email'] ?? ''}',
+                ),
                 isThreeLine: true,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       icon: const Icon(Icons.chat),
-                      onPressed: () {
-                        // TODO: Start chat with this user
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Start chat - not implemented')),
+                      onPressed: () async {
+                        final currentUid = FirebaseAuth.instance.currentUser!.uid;
+                        final otherUid = _result!.data()?['uid'] as String;
+                        final chatId = _generateChatId(currentUid, otherUid);
+
+                        final chatDoc =
+                        FirebaseFirestore.instance.collection('chats').doc(chatId);
+                        final chatSnapshot = await chatDoc.get();
+
+                        if (!chatSnapshot.exists) {
+                          await chatDoc.set({
+                            'participants': [currentUid, otherUid],
+                            'userNames': {
+                              currentUid: FirebaseAuth.instance.currentUser!.displayName ?? 'Me',
+                              otherUid: _result!.data()?['name'] ?? 'Unknown',
+                            },
+                            'lastMessage': '',
+                            'lastTimestamp': FieldValue.serverTimestamp(),
+                          });
+                        }
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(
+                              chatId: chatId,
+                              otherUserName: _result!.data()?['name'] ?? 'Unknown',
+                            ),
+                          ),
                         );
                       },
                     ),
                     IconButton(
                       icon: const Icon(Icons.call),
                       onPressed: () {
-                        final currentUid = FirebaseAuth.instance.currentUser?.uid;
-                        final calleeUid = _result!['uid'];
-                        final calleeName = _result!['name'] ?? '';
-                        if (currentUid == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('You are not authenticated')),
-                          );
-                          return;
-                        }
+                        final currentUid = FirebaseAuth.instance.currentUser!.uid;
+                        final calleeUid = _result!.data()?['uid'] as String;
+                        final calleeName = _result!.data()?['name'] ?? '';
 
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => CallScreen(callerId: currentUid, calleeId: calleeUid, calleeName: calleeName),
+                            builder: (_) => CallScreen(
+                              callerId: currentUid,
+                              calleeId: calleeUid,
+                              calleeName: calleeName,
+                            ),
                           ),
                         );
                       },
@@ -145,7 +176,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ),
           ],
 
-          // If no search yet, show a helpful hint
           if (_result == null && _error == null && !_isLoading)
             const Expanded(
               child: Center(

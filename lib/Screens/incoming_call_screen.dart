@@ -1,3 +1,5 @@
+// incoming_call_screen.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'call_screen.dart';
 
@@ -26,9 +28,10 @@ class IncomingCallScreen extends StatelessWidget {
             const Spacer(),
             CircleAvatar(
               radius: 60,
+              backgroundColor: Colors.blueGrey.shade800,
               child: Text(
                 callerName[0].toUpperCase(),
-                style: const TextStyle(fontSize: 40),
+                style: const TextStyle(fontSize: 40, color: Colors.white),
               ),
             ),
             const SizedBox(height: 20),
@@ -54,18 +57,26 @@ class IncomingCallScreen extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
+                  // Decline Button: mark call as 'rejected' in Firestore
                   FloatingActionButton(
                     backgroundColor: Colors.red,
                     onPressed: () async {
-                      // Decline call
+                      try {
+                        await FirebaseFirestore.instance.collection('calls').doc(callId).update({
+                          'state': 'rejected',
+                        });
+                      } catch (e) {
+                        debugPrint('Error rejecting call: $e');
+                      }
                       Navigator.pop(context, false);
                     },
-                    child: const Icon(Icons.call_end),
+                    child: const Icon(Icons.call_end, color: Colors.white),
                   ),
+
+                  // Accept Button: open CallScreen in incoming mode
                   FloatingActionButton(
                     backgroundColor: Colors.green,
                     onPressed: () {
-                      // Accept call
                       Navigator.pop(context, true);
                       Navigator.push(
                         context,
@@ -80,7 +91,7 @@ class IncomingCallScreen extends StatelessWidget {
                         ),
                       );
                     },
-                    child: const Icon(Icons.call),
+                    child: const Icon(Icons.call, color: Colors.white),
                   ),
                 ],
               ),

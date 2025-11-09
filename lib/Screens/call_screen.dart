@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -13,9 +12,9 @@ class CallScreen extends StatefulWidget {
   final String? callId;
 
   const CallScreen({
-    super.key, 
-    required this.callerId, 
-    required this.calleeId, 
+    super.key,
+    required this.callerId,
+    required this.calleeId,
     required this.calleeName,
     this.isIncoming = false,
     this.callId,
@@ -29,9 +28,9 @@ class _CallScreenState extends State<CallScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  bool _remoteDescSet = false;
+  final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
 
-  // Call document id
+  bool _remoteDescSet = false;
   String? _callDocId;
   StreamSubscription? _callSub;
   StreamSubscription? _callerCandidatesSub;
@@ -39,21 +38,27 @@ class _CallScreenState extends State<CallScreen> {
 
   bool _inCalling = false;
   bool _isMuted = false;
-  bool _isSpeakerOn = false;
-  
+  bool _isSpeakerOn = true;
+
   DateTime? _callStartTime;
   Timer? _durationTimer;
   String _callDuration = '00:00';
-
-  Future<bool> _requestMicrophonePermission() async {
-    final status = await Permission.microphone.request();
-    return status.isGranted;
-  }
+  bool _isHangingUp = false;
 
   @override
   void initState() {
     super.initState();
+    _initializeRenderer();
     _requestPermissions();
+  }
+
+  Future<void> _initializeRenderer() async {
+    await _remoteRenderer.initialize();
+  }
+
+  Future<bool> _requestMicrophonePermission() async {
+    final status = await Permission.microphone.request();
+    return status.isGranted;
   }
 
   Future<void> _requestPermissions() async {
@@ -64,7 +69,8 @@ class _CallScreenState extends State<CallScreen> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission is required for calls')),
+            const SnackBar(
+                content: Text('Microphone permission is required for calls')),
           );
           Navigator.of(context).pop();
         }
@@ -81,87 +87,67 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startCall() async {
-    // Request microphone permission first
     final hasPermission = await _requestMicrophonePermission();
     if (!hasPermission) {
       throw Exception('Microphone permission denied');
     }
 
     try {
-      // Get user media - audio only for voice calls
+      // ✅ Initialize audio system for Android
+      await Helper.setSpeakerphoneOn(true);
+
+      // Get user media - audio only
       final Map<String, dynamic> mediaConstraints = {
         'audio': true,
         'video': false,
       };
 
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      
-      // Verify audio tracks
       final audioTracks = _localStream?.getAudioTracks();
-      debugPrint('Audio tracks: ${audioTracks?.length}');
-      if (audioTracks?.isEmpty ?? true) {
-        throw Exception('No audio track available');
+      if (audioTracks == null || audioTracks.isEmpty) {
+        throw Exception('No audio track found');
       }
-      debugPrint('Audio track enabled: ${audioTracks!.first.enabled}');
 
-      // Create peer connection with audio configuration
+      // Create peer connection
       final configuration = {
         'iceServers': [
           {'urls': 'stun:stun.l.google.com:19302'},
+          {
+            'urls': 'turn:turn.anyfirewall.com:443?transport=tcp',
+            'username': 'webrtc',
+            'credential': 'webrtc'
+          },
         ],
-        'sdpSemantics': 'unified-plan',
-        'mandatory': {
-          'OfferToReceiveAudio': true,
-          'OfferToReceiveVideo': false
-        },
-        'optional': [
-          {'DtlsSrtpKeyAgreement': true},
-        ]
       };
       _peerConnection = await createPeerConnection(configuration);
 
-      // Add local audio track and set up transceivers
-      final tracks = _localStream?.getAudioTracks() ?? [];
-      final audioTrack = tracks.isNotEmpty ? tracks.first : null;
-      if (audioTrack != null) {
-        debugPrint('Adding audio track: enabled=${audioTrack.enabled}');
-        final sender = await _peerConnection?.addTrack(audioTrack, _localStream!);
-        debugPrint('Audio sender added: ${sender != null}');
-        
-        // Ensure audio is enabled
-        audioTrack.enabled = true;
-      } else {
-        debugPrint('No audio track available!');
-      }
+      // Add local audio track
+      final audioTrack = audioTracks.first;
+      await _peerConnection?.addTrack(audioTrack, _localStream!);
+      audioTrack.enabled = true;
 
-      // Remote stream
-      _peerConnection?.onTrack = (event) {
-        debugPrint('onTrack: ${event.track.kind}, streams: ${event.streams.length}');
-        if (event.streams.isNotEmpty) {
-          final stream = event.streams[0];
-          debugPrint('Remote stream audio tracks: ${stream.getAudioTracks().length}');
-          
-          // Ensure audio is properly routed
-          if (event.track.kind == 'audio') {
-            event.track.enabled = true;
-            final audioTracks = stream.getAudioTracks();
-            if (audioTracks.isNotEmpty) {
-              audioTracks.first.enabled = true;
-            }
-          }
-          
+      // ✅ Handle remote audio
+      _peerConnection?.onTrack = (event) async {
+        if (event.track.kind == 'audio' && event.streams.isNotEmpty) {
+          debugPrint('Remote audio track received');
+          _remoteRenderer.srcObject = event.streams.first;
+          await Helper.setSpeakerphoneOn(true); // Route audio to speaker
           _startCallTimer();
           setState(() => _inCalling = true);
         }
       };
 
-      // ICE candidate handling
+      // Handle ICE candidates
       _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) async {
         if (candidate.candidate == null) return;
-        final candidateCollection = widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
+        final collection =
+            widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
         if (_callDocId != null) {
-          final col = _firestore.collection('calls').doc(_callDocId).collection(candidateCollection);
-          await col.add({
+          await _firestore
+              .collection('calls')
+              .doc(_callDocId)
+              .collection(collection)
+              .add({
             'candidate': candidate.candidate,
             'sdpMLineIndex': candidate.sdpMLineIndex,
             'sdpMid': candidate.sdpMid,
@@ -169,11 +155,9 @@ class _CallScreenState extends State<CallScreen> {
         }
       };
 
-      _callDocId = widget.isIncoming ? widget.callId : _firestore.collection('calls').doc().id;
-
-      // Set up connection state handling
-      _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
-        debugPrint('Connection state changed: $state');
+      // Handle connection states
+      _peerConnection?.onConnectionState = (state) {
+        debugPrint('Connection state: $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
@@ -181,16 +165,20 @@ class _CallScreenState extends State<CallScreen> {
         }
       };
 
+      _callDocId =
+          widget.isIncoming ? widget.callId : _firestore.collection('calls').doc().id;
+
       if (widget.isIncoming) {
         await _handleIncomingCall();
       } else {
         await _makeOutgoingCall();
       }
-
     } catch (e) {
       debugPrint('startCall error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Call start failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Call start failed: $e')),
+        );
       }
       _hangUp();
     }
@@ -200,78 +188,42 @@ class _CallScreenState extends State<CallScreen> {
     try {
       final callDoc = _firestore.collection('calls').doc(_callDocId);
       final callData = await callDoc.get();
-      
-      if (!callData.exists) {
-        throw Exception('Call no longer exists');
-      }
+      if (!callData.exists) throw Exception('Call no longer exists');
 
       final data = callData.data()!;
       final offer = data['offer'];
       if (offer == null) throw Exception('No offer in call');
 
-      // Set remote description (caller's offer)
-      final rtcOffer = RTCSessionDescription(offer['sdp'], offer['type']);
-      await _peerConnection!.setRemoteDescription(rtcOffer);
+      await _peerConnection!.setRemoteDescription(
+          RTCSessionDescription(offer['sdp'], offer['type']));
 
-      // Create and set local description (answer)
       final answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
 
-      // Send answer
       await callDoc.update({
-        'answer': {
-          'sdp': answer.sdp,
-          'type': answer.type,
-        },
+        'answer': {'sdp': answer.sdp, 'type': answer.type},
         'state': 'answered',
       });
 
-      // Listen for caller ICE candidates
-      _callerCandidatesSub = callDoc.collection('callerCandidates').snapshots().listen((snapshot) {
+      _callerCandidatesSub =
+          callDoc.collection('callerCandidates').snapshots().listen((snapshot) {
         for (final change in snapshot.docChanges) {
           if (change.type == DocumentChangeType.added) {
             final data = change.doc.data();
-            if (data == null) continue;
-            _peerConnection!.addCandidate(
-              RTCIceCandidate(
+            if (data != null) {
+              _peerConnection!.addCandidate(RTCIceCandidate(
                 data['candidate'],
                 data['sdpMid'],
                 data['sdpMLineIndex'],
-              ),
-            );
+              ));
+            }
           }
         }
       });
 
-      // Listen for call state changes
-      _callSub = callDoc.snapshots().listen((snapshot) {
-        if (!snapshot.exists) {
-          _hangUp();
-          return;
-        }
-        final data = snapshot.data()!;
-        if (data['state'] == 'ended' || data['state'] == 'rejected') {
-          _hangUp();
-          return;
-        }
-        if (!_inCalling && data['state'] == 'answered') {
-          setState(() {
-            _inCalling = true;
-          });
-        }
-      });
-
-      setState(() {
-        _inCalling = true;
-      });
-
+      setState(() => _inCalling = true);
     } catch (e) {
-      debugPrint('Error handling incoming call: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to answer call: $e')),
-        );
-      }
+      debugPrint('Incoming call error: $e');
       _hangUp();
     }
   }
@@ -279,94 +231,57 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _makeOutgoingCall() async {
     try {
       final callDoc = _firestore.collection('calls').doc(_callDocId);
-
-      // Start call timeout
       _startCallTimeout();
 
-      // Create offer with audio preferences
-      final offer = await _peerConnection!.createOffer({
-        'mandatory': {
-          'OfferToReceiveAudio': true,
-          'OfferToReceiveVideo': false,
-        },
-      });
-
-      debugPrint('Created offer: ${offer.sdp}');
+      final offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
 
-      // Save offer to call doc
       await callDoc.set({
         'callerId': widget.callerId,
         'calleeId': widget.calleeId,
-        'callerName': 'caller',
         'calleeName': widget.calleeName,
-        'offer': {
-          'sdp': offer.sdp,
-          'type': offer.type,
-        },
-        'createdAt': FieldValue.serverTimestamp(),
+        'offer': {'sdp': offer.sdp, 'type': offer.type},
         'state': 'offer',
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Listen for answer
       _callSub = callDoc.snapshots().listen((snapshot) async {
         if (!snapshot.exists) {
           _hangUp();
           return;
         }
-
         final data = snapshot.data();
         if (data == null) return;
-
-        if (data['state'] == 'ended' || data['state'] == 'rejected') {
-          _hangUp();
-          return;
-        }
-
         if (data['answer'] != null && !_remoteDescSet) {
           final answer = data['answer'];
-          final rtcAnswer = RTCSessionDescription(answer['sdp'], answer['type']);
-          try {
-            await _peerConnection?.setRemoteDescription(rtcAnswer);
-            _remoteDescSet = true;
-            setState(() {
-              _inCalling = true;
-            });
-          } catch (e) {
-            debugPrint('setRemoteDescription error: $e');
-          }
+          await _peerConnection!
+              .setRemoteDescription(RTCSessionDescription(answer['sdp'], answer['type']));
+          _remoteDescSet = true;
+          setState(() => _inCalling = true);
         }
       });
 
-      // Listen for callee ICE candidates
-      _calleeCandidatesSub = callDoc.collection('calleeCandidates').snapshots().listen((snap) {
+      _calleeCandidatesSub =
+          callDoc.collection('calleeCandidates').snapshots().listen((snap) {
         for (final doc in snap.docChanges) {
           if (doc.type == DocumentChangeType.added) {
             final data = doc.doc.data();
-            if (data == null) continue;
-            _peerConnection?.addCandidate(
-              RTCIceCandidate(
+            if (data != null) {
+              _peerConnection?.addCandidate(RTCIceCandidate(
                 data['candidate'],
                 data['sdpMid'],
                 data['sdpMLineIndex'],
-              ),
-            );
+              ));
+            }
           }
         }
       });
-
     } catch (e) {
-      debugPrint('Error making outgoing call: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to make call: $e')),
-        );
-      }
+      debugPrint('Outgoing call error: $e');
       _hangUp();
     }
   }
 
-  // Add timeout for unanswered calls
   Future<void> _startCallTimeout() async {
     await Future.delayed(const Duration(seconds: 30));
     if (!_inCalling && mounted) {
@@ -377,26 +292,10 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  Future<void> _checkAudioState() async {
-    if (_localStream == null) {
-      debugPrint('No local stream available');
-      return;
-    }
-
-    final audioTracks = _localStream!.getAudioTracks();
-    debugPrint('Audio track count: ${audioTracks.length}');
-    
-    for (final track in audioTracks) {
-      debugPrint('Audio track: enabled=${track.enabled}, muted=${track.muted}, kind=${track.kind}');
-    }
-  }
-
   void _startCallTimer() {
     _callStartTime = DateTime.now();
     _durationTimer?.cancel();
-    _checkAudioState(); // Check audio state when call starts
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
       final duration = DateTime.now().difference(_callStartTime!);
       final minutes = duration.inMinutes.toString().padLeft(2, '0');
       final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
@@ -406,34 +305,30 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  bool _isHangingUp = false;
-
   Future<void> _hangUp() async {
     if (_isHangingUp) return;
     _isHangingUp = true;
     _durationTimer?.cancel();
+
     try {
       if (_callDocId != null) {
-        final callRef = _firestore.collection('calls').doc(_callDocId);
-        // update state
-        await callRef.update({'state': 'ended'});
-        // cleanup subcollections
-        final callerCols = await callRef.collection('callerCandidates').get();
-        for (final d in callerCols.docs) {
+        final ref = _firestore.collection('calls').doc(_callDocId);
+        await ref.update({'state': 'ended'});
+        final caller = await ref.collection('callerCandidates').get();
+        for (var d in caller.docs) {
           await d.reference.delete();
         }
-        final calleeCols = await callRef.collection('calleeCandidates').get();
-        for (final d in calleeCols.docs) {
+        final callee = await ref.collection('calleeCandidates').get();
+        for (var d in callee.docs) {
           await d.reference.delete();
         }
-        await callRef.delete();
+        await ref.delete();
       }
-    } catch (e) {
-      debugPrint('hangup cleanup error: $e');
-    }
+    } catch (_) {}
 
-    _peerConnection?.close();
-    _localStream?.dispose();
+    await _peerConnection?.close();
+    await _localStream?.dispose();
+    await _remoteRenderer.dispose();
 
     _callSub?.cancel();
     _callerCandidatesSub?.cancel();
@@ -450,11 +345,11 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final callStatus = widget.isIncoming ? 
-      (_inCalling ? 'Connected' : 'Answering call from ${widget.calleeName}...') :
-      (_inCalling ? 'Connected' : 'Calling ${widget.calleeName}...');
-
-    final duration = _inCalling ? _callDuration : '';
+    final callStatus = widget.isIncoming
+        ? (_inCalling
+            ? 'Connected'
+            : 'Answering call from ${widget.calleeName}...')
+        : (_inCalling ? 'Connected' : 'Calling ${widget.calleeName}...');
 
     return Scaffold(
       backgroundColor: const Color(0xFF1C1C1E),
@@ -465,7 +360,6 @@ class _CallScreenState extends State<CallScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Caller avatar
                   Container(
                     width: 120,
                     height: 120,
@@ -477,119 +371,74 @@ class _CallScreenState extends State<CallScreen> {
                       child: Text(
                         widget.calleeName[0].toUpperCase(),
                         style: const TextStyle(
-                          fontSize: 48,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+                            fontSize: 48,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white),
                       ),
                     ),
                   ),
                   const SizedBox(height: 24),
-                  // Caller name
-                  Text(
-                    widget.calleeName,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Call status
-                  Text(
-                    callStatus,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  if (_inCalling) ...[
-                    const SizedBox(height: 8),
-                    // Call duration
-                    Text(
-                      duration,
+                  Text(widget.calleeName,
                       style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white54,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white)),
+                  const SizedBox(height: 8),
+                  Text(callStatus,
+                      style:
+                          const TextStyle(fontSize: 16, color: Colors.white70)),
+                  if (_inCalling)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        _callDuration,
+                        style: const TextStyle(
+                            fontSize: 14, color: Colors.white54),
                       ),
                     ),
-                  ],
                 ],
               ),
             ),
-            // Call controls
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+              padding:
+                  const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
               decoration: BoxDecoration(
                 color: Colors.black.withAlpha(128),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(32)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  // Mute button
                   _buildControlButton(
                     icon: _isMuted ? Icons.mic_off : Icons.mic,
                     label: 'Mute',
                     isActive: _isMuted,
                     onPressed: () {
                       if (_localStream != null) {
-                        final audioTrack = _localStream!.getAudioTracks().first;
-                        audioTrack.enabled = !audioTrack.enabled;
-                        setState(() => _isMuted = !audioTrack.enabled);
+                        final track = _localStream!.getAudioTracks().first;
+                        track.enabled = !track.enabled;
+                        setState(() => _isMuted = !track.enabled);
                       }
                     },
                   ),
-                  // End call button
                   Container(
                     decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _hangUp,
-                        child: const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Icon(
-                            Icons.call_end,
-                            color: Colors.white,
-                            size: 36,
-                          ),
-                        ),
-                      ),
+                        color: Colors.red, shape: BoxShape.circle),
+                    child: IconButton(
+                      icon: const Icon(Icons.call_end, color: Colors.white),
+                      iconSize: 36,
+                      onPressed: _hangUp,
                     ),
                   ),
-                  // Speaker button
                   _buildControlButton(
-                    icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
+                    icon:
+                        _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
                     label: 'Speaker',
                     isActive: _isSpeakerOn,
-                    onPressed: () {
+                    onPressed: () async {
                       setState(() => _isSpeakerOn = !_isSpeakerOn);
-                      if (_peerConnection != null) {
-                        final audioTrack = _localStream?.getAudioTracks().first;
-                        if (audioTrack != null) {
-                          final constraints = {
-                            'audio': {
-                              'echoCancellation': true,
-                              'noiseSuppression': true,
-                              'autoGainControl': true,
-                              'googAutoGainControl': true,
-                              'googAutoGainControl2': true,
-                              'googEchoCancellation': true,
-                              'googEchoCancellation2': true,
-                              'googNoiseSuppression': true,
-                              'googNoiseSuppression2': true,
-                              'googHighpassFilter': true,
-                              'googAudioMirroring': _isSpeakerOn,
-                            }
-                          };
-                          audioTrack.applyConstraints(constraints);
-                        }
-                      }
+                      await Helper.setSpeakerphoneOn(_isSpeakerOn);
                     },
                   ),
                 ],
@@ -612,33 +461,19 @@ class _CallScreenState extends State<CallScreen> {
       children: [
         Container(
           decoration: BoxDecoration(
-              color: isActive ? Colors.white.withAlpha(77) : Colors.transparent,
+            color: isActive ? Colors.white.withAlpha(77) : Colors.transparent,
             shape: BoxShape.circle,
           ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onPressed,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Icon(
-                  icon,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
-            ),
+          child: IconButton(
+            icon: Icon(icon, color: Colors.white, size: 28),
+            onPressed: onPressed,
           ),
         ),
         const SizedBox(height: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: isActive ? Colors.white : Colors.white70,
-          ),
-        ),
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                color: isActive ? Colors.white : Colors.white70)),
       ],
     );
   }
