@@ -270,7 +270,6 @@ class _CallScreenState extends State<CallScreen> {
             track.enabled = true;
             debugPrint('>>> Enabled remote audio track: ${track.id}');
             debugPrint('   Track enabled state: ${track.enabled}');
-            debugPrint('   Track readyState: ${track.readyState}');
             debugPrint('   Track muted: ${track.muted}');
             
             // Monitor track state changes

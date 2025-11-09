@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 class FirebaseService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -35,7 +36,7 @@ class FirebaseService {
       await Future.delayed(const Duration(seconds: 1));
       // Step 3️⃣: Save user info to Firestore
       final uid = cred.user?.uid;
-      print('signUpUser: created user with uid=$uid; auth.currentUser=${_auth.currentUser?.uid}');
+      debugPrint('signUpUser: created user with uid=$uid; auth.currentUser=${_auth.currentUser?.uid}');
       if (uid == null) return 'Failed to create user';
 
       try {
@@ -44,10 +45,10 @@ class FirebaseService {
         
         // Double check auth state
         final currentUser = _auth.currentUser;
-        print('Before Firestore write - currentUser: ${currentUser?.uid}, original uid: $uid');
+        debugPrint('Before Firestore write - currentUser: ${currentUser?.uid}, original uid: $uid');
         
         if (currentUser == null) {
-          print('Error: No current user before Firestore write');
+          debugPrint('Error: No current user before Firestore write');
           return 'Error: Authentication state not ready';
         }
 
@@ -59,7 +60,7 @@ class FirebaseService {
           'createdAt': FieldValue.serverTimestamp(),
           'status': 'online',
         };
-        print('Attempting to save user data: $userData');
+        debugPrint('Attempting to save user data: $userData');
         
         // First try to write with merge option
         await _firestore.collection('users').doc(uid).set(
@@ -70,26 +71,26 @@ class FirebaseService {
         // Verify the write by reading it back
         final docSnapshot = await _firestore.collection('users').doc(uid).get();
         if (!docSnapshot.exists) {
-          print('Error: Document not found after write!');
+          debugPrint('Error: Document not found after write!');
           return 'Error: Failed to verify user data creation';
         }
         
         final savedData = docSnapshot.data();
-        print('Verified saved data: $savedData');
+        debugPrint('Verified saved data: $savedData');
         
         if (savedData?['username'] != username.trim()) {
-          print('Error: Username verification failed. Saved: ${savedData?['username']}, Expected: ${username.trim()}');
+          debugPrint('Error: Username verification failed. Saved: ${savedData?['username']}, Expected: ${username.trim()}');
           return 'Error: Username verification failed';
         }
       } on FirebaseException catch (fe) {
-        print('Firestore write failed (code=${fe.code}): ${fe.message}');
+        debugPrint('Firestore write failed (code=${fe.code}): ${fe.message}');
         if (fe.code == 'permission-denied') {
-          print('Permission denied. Current auth state: ${_auth.currentUser?.uid}');
+          debugPrint('Permission denied. Current auth state: ${_auth.currentUser?.uid}');
         }
         return 'firestore_error:${fe.code}:${fe.message}';
       }
 
-      print('signUpUser: Firestore write succeeded for uid=$uid');
+      debugPrint('signUpUser: Firestore write succeeded for uid=$uid');
       return 'success';
     } on FirebaseAuthException catch (e) {
       if (e.code == 'email-already-in-use') {
