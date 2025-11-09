@@ -43,6 +43,7 @@ class _CallScreenState extends State<CallScreen> {
   DateTime? _callStartTime;
   Timer? _durationTimer;
   Timer? _statsTimer;
+  Timer? _audioCheckTimer;
   String _callDuration = '00:00';
   bool _isHangingUp = false;
   
@@ -251,11 +252,27 @@ class _CallScreenState extends State<CallScreen> {
           debugPrint('Remote audio track received: ${event.track.id}');
           final stream = event.streams.first;
           
+          // CRITICAL: Set remote stream to renderer FIRST (required for audio playback)
+          _remoteRenderer.srcObject = stream;
+          debugPrint('Remote stream set to renderer: ${stream.id}');
+          
+          // Force renderer to play audio by setting it up properly
+          try {
+            await _remoteRenderer.initialize();
+            debugPrint('Remote renderer initialized successfully');
+          } catch (e) {
+            debugPrint('Renderer already initialized: $e');
+          }
+          
+          // CRITICAL: Small delay to ensure renderer is ready before enabling tracks
+          await Future.delayed(const Duration(milliseconds: 100));
+          
           // Configure remote audio track - CRITICAL for audio playback
           final audioTracks = stream.getAudioTracks();
+          debugPrint('Found ${audioTracks.length} remote audio track(s)');
           for (var track in audioTracks) {
             track.enabled = true;
-            debugPrint('Remote audio track enabled: ${track.id}');
+            debugPrint('Remote audio track enabled: ${track.id}, enabled=${track.enabled}');
             
             // Ensure track is unmuted
             if (track.muted != null) {
@@ -264,44 +281,40 @@ class _CallScreenState extends State<CallScreen> {
             }
           }
           
-          // Set remote stream to renderer (required for audio playback)
-          _remoteRenderer.srcObject = stream;
-          
-          // Force renderer to play audio by setting it up properly
-          try {
-            await _remoteRenderer.initialize();
-          } catch (e) {
-            debugPrint('Renderer already initialized: $e');
+          // CRITICAL: Configure audio output immediately and repeatedly
+          Future<void> configureAudioOutput() async {
+            try {
+              await Helper.setSpeakerphoneOn(_isSpeakerOn);
+              debugPrint('Audio output configured: speaker=$_isSpeakerOn');
+            } on UnimplementedError catch (e, st) {
+              debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
+            } catch (e, st) {
+              debugPrint('Error configuring audio output: $e\n$st');
+            }
           }
           
-          // Configure audio output immediately
-          try {
-            await Helper.setSpeakerphoneOn(_isSpeakerOn);
-            debugPrint('Audio output configured: speaker=$_isSpeakerOn');
-          } on UnimplementedError catch (e, st) {
-            debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
-          } catch (e, st) {
-            debugPrint('Error configuring audio output: $e\n$st');
-          }
+          // Configure immediately
+          await configureAudioOutput();
           
           // Re-configure audio routing multiple times to ensure it works
-          for (var delay in [100, 300, 500, 1000]) {
+          for (var delay in [100, 300, 500, 1000, 2000]) {
             Future.delayed(Duration(milliseconds: delay), () async {
+              if (!mounted || _isHangingUp) return;
+              
               try {
-                // Re-enable remote audio track
-                for (var track in stream.getAudioTracks()) {
-                  if (!track.enabled) {
-                    track.enabled = true;
-                    debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}');
-                  }
+                // CRITICAL: Re-enable ALL remote audio tracks (not just disabled ones)
+                final currentStream = _remoteRenderer.srcObject ?? stream;
+                final tracks = currentStream.getAudioTracks();
+                debugPrint('Re-checking ${tracks.length} remote audio track(s) at ${delay}ms');
+                
+                for (var track in tracks) {
+                  // Force enable every time to ensure it stays enabled
+                  track.enabled = true;
+                  debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}, enabled=${track.enabled}');
                 }
                 
                 // Re-configure audio output
-                try {
-                  await Helper.setSpeakerphoneOn(_isSpeakerOn);
-                } on UnimplementedError {
-                  // Ignore - not implemented on this platform
-                }
+                await configureAudioOutput();
               } catch (e) {
                 debugPrint('Error in delayed audio setup at ${delay}ms: $e');
               }
@@ -309,8 +322,8 @@ class _CallScreenState extends State<CallScreen> {
           }
           
           if (mounted) {
-            _startCallTimer();
-            setState(() => _inCalling = true);
+          _startCallTimer();
+          setState(() => _inCalling = true);
           }
           
           // Log audio track details
@@ -366,16 +379,19 @@ class _CallScreenState extends State<CallScreen> {
           }
         } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
                    state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-          debugPrint('ICE Connection established - ensuring audio playback');
-          // Ensure remote audio is playing when connection is established
+          debugPrint('=== ICE Connection established - ensuring audio playback ===');
+          
+          // CRITICAL: Ensure remote audio is playing when connection is established
           Future.delayed(const Duration(milliseconds: 200), () {
             _ensureRemoteAudioPlaying();
           });
           
-          // Also check again after a delay
-          Future.delayed(const Duration(milliseconds: 1000), () {
-            _ensureRemoteAudioPlaying();
-          });
+          // Also check again after delays
+          for (var delay in [500, 1000, 2000]) {
+            Future.delayed(Duration(milliseconds: delay), () {
+              _ensureRemoteAudioPlaying();
+            });
+          }
         } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
           debugPrint('ICE Connection failed - attempting reconnection');
           _attemptReconnection();
@@ -409,15 +425,12 @@ class _CallScreenState extends State<CallScreen> {
             debugPrint('ERROR: Local stream is null after connection!');
           }
           
-          // CRITICAL: Ensure remote audio is playing
-          Future.delayed(const Duration(milliseconds: 300), () {
-            _ensureRemoteAudioPlaying();
-          });
-          
-          // Also check again after a longer delay in case onTrack hasn't fired yet
-          Future.delayed(const Duration(milliseconds: 1500), () {
-            _ensureRemoteAudioPlaying();
-          });
+          // CRITICAL: Ensure remote audio is playing - check multiple times
+          for (var delay in [300, 800, 1500, 2500]) {
+            Future.delayed(Duration(milliseconds: delay), () {
+              _ensureRemoteAudioPlaying();
+            });
+          }
           
           if (!_inCalling && mounted) {
             _startCallTimer();
@@ -925,18 +938,27 @@ class _CallScreenState extends State<CallScreen> {
           return;
         }
         
+        // CRITICAL: Force enable ALL tracks and verify
         for (var track in remoteTracks) {
           final wasEnabled = track.enabled;
-          track.enabled = true;
+          track.enabled = true; // Force enable
           debugPrint('>>> Ensured remote audio track enabled: ${track.id}');
-          debugPrint('   Was enabled: $wasEnabled, Now enabled: ${track.enabled}');
+          debugPrint('   Was enabled: $wasEnabled, Now enabled: ${track.enabled}, muted: ${track.muted}');
           
-          // Verify it's actually enabled
+          // Verify it's actually enabled - if not, force enable again
           if (!track.enabled) {
-            debugPrint('ERROR: Remote track ${track.id} is still disabled after enabling!');
-            // Force enable again
+            debugPrint('ERROR: Remote track ${track.id} is still disabled - forcing enable again!');
             track.enabled = true;
           }
+        }
+        
+        // CRITICAL: Re-initialize renderer to ensure audio plays
+        try {
+          await _remoteRenderer.initialize();
+          debugPrint('Renderer re-initialized in _ensureRemoteAudioPlaying');
+        } catch (e) {
+          // Renderer might already be initialized, that's okay
+          debugPrint('Renderer initialization check: $e');
         }
         
         // Configure audio output
@@ -968,6 +990,23 @@ class _CallScreenState extends State<CallScreen> {
     
     // Start monitoring call stats
     _startStatsMonitoring();
+    
+    // CRITICAL: Start periodic audio check to ensure audio stays enabled
+    _audioCheckTimer?.cancel();
+    _audioCheckTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!_isHangingUp && _inCalling) {
+        _ensureRemoteAudioPlaying();
+        // Also ensure local audio is enabled
+        if (_localStream != null) {
+          for (var track in _localStream!.getAudioTracks()) {
+            if (!track.enabled && !_isMuted) {
+              track.enabled = true;
+              debugPrint('Periodic check: Re-enabled local audio track ${track.id}');
+            }
+          }
+        }
+      }
+    });
   }
 
   Future<void> _startStatsMonitoring() async {
@@ -1024,6 +1063,7 @@ class _CallScreenState extends State<CallScreen> {
     if (_isHangingUp) return;
     _isHangingUp = true;
     _durationTimer?.cancel();
+    _audioCheckTimer?.cancel();
 
     try {
       if (_callDocId != null) {
@@ -1055,6 +1095,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _statsTimer?.cancel();
+    _audioCheckTimer?.cancel();
     _hangUp();
     super.dispose();
   }

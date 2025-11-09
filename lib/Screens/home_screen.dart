@@ -77,17 +77,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.search, color: Colors.white),
+            icon: const Icon(Icons.circle_notifications, color: Colors.white),
             onPressed: () {
               // TODO: Implement search
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            onPressed: () {
-              // TODO: Implement menu
-            },
-          ),
+          
         ],
       ),
       body: Container(
