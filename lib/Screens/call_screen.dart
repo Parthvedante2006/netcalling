@@ -60,9 +60,18 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _initializeAudio() async {
     try {
-      // Set default audio settings
+      // Set default audio settings - speaker on by default for calls
       setState(() => _isSpeakerOn = true);
-      await Helper.setSpeakerphoneOn(true);
+      
+      // Configure speakerphone - this is critical for audio playback
+      try {
+        await Helper.setSpeakerphoneOn(true);
+        debugPrint('Speakerphone initialized to ON');
+      } on UnimplementedError catch (e, st) {
+        debugPrint('Helper.setSpeakerphoneOn not implemented: $e\n$st');
+      } catch (e, st) {
+        debugPrint('Error setting speakerphone on: $e\n$st');
+      }
     } catch (e) {
       debugPrint('Error initializing audio: $e');
     }
@@ -148,8 +157,14 @@ class _CallScreenState extends State<CallScreen> {
       // Enable audio processing
       for (var track in audioTracks) {
         track.enabled = true;
-        final settings = await track.getSettings();
-        debugPrint('Audio track settings: $settings');
+        try {
+          final settings = await track.getSettings();
+          debugPrint('Audio track settings: $settings');
+        } on UnimplementedError catch (e, st) {
+            debugPrint('getSettings not implemented on this platform: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error reading audio track settings: $e\n$st');
+          }
       }
 
       // Create peer connection with optimized configuration
@@ -186,6 +201,8 @@ class _CallScreenState extends State<CallScreen> {
       debugPrint('Creating peer connection...');
       _peerConnection = await createPeerConnection(configuration);
 
+      // (transceiver addition omitted for compatibility with this flutter_webrtc version)
+
       // Enhanced audio track handling
       final audioTrack = audioTracks.first;
       debugPrint('Adding audio track to peer connection...');
@@ -208,40 +225,93 @@ class _CallScreenState extends State<CallScreen> {
       // Enhanced remote audio handling
       _peerConnection?.onTrack = (event) async {
         if (event.track.kind == 'audio' && event.streams.isNotEmpty) {
-          debugPrint('Remote audio track received');
+          debugPrint('Remote audio track received: ${event.track.id}');
           final stream = event.streams.first;
           
-          // Configure remote audio track
+          // Configure remote audio track - CRITICAL for audio playback
           final audioTracks = stream.getAudioTracks();
           for (var track in audioTracks) {
             track.enabled = true;
-            debugPrint('Remote audio track enabled: ${track.id}');
+            debugPrint('Remote audio track enabled: ${track.id}, readyState: ${track.readyState}');
+            
+            // Ensure track is unmuted
+            if (track.muted != null) {
+              // Force enable the track
+              track.enabled = true;
+            }
           }
           
-          // Set remote stream
+          // Set remote stream to renderer (required for audio playback)
           _remoteRenderer.srcObject = stream;
           
-          // Configure audio output
-          await Helper.setSpeakerphoneOn(_isSpeakerOn);
+          // Force renderer to play audio by setting it up properly
+          try {
+            await _remoteRenderer.initialize();
+          } catch (e) {
+            debugPrint('Renderer already initialized: $e');
+          }
           
-          // Double-check audio routing after a short delay
-          Future.delayed(const Duration(milliseconds: 500), () async {
+          // Configure audio output immediately
+          try {
             await Helper.setSpeakerphoneOn(_isSpeakerOn);
-          });
+            debugPrint('Audio output configured: speaker=${_isSpeakerOn}');
+          } on UnimplementedError catch (e, st) {
+            debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error configuring audio output: $e\n$st');
+          }
           
-          _startCallTimer();
-          setState(() => _inCalling = true);
+          // Re-configure audio routing multiple times to ensure it works
+          for (var delay in [100, 300, 500, 1000]) {
+            Future.delayed(Duration(milliseconds: delay), () async {
+              try {
+                // Re-enable remote audio track
+                for (var track in stream.getAudioTracks()) {
+                  if (!track.enabled) {
+                    track.enabled = true;
+                    debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}');
+                  }
+                }
+                
+                // Re-configure audio output
+                try {
+                  await Helper.setSpeakerphoneOn(_isSpeakerOn);
+                } on UnimplementedError catch (e) {
+                  // Ignore
+                }
+              } catch (e) {
+                debugPrint('Error in delayed audio setup at ${delay}ms: $e');
+              }
+            });
+          }
+          
+          if (mounted) {
+            _startCallTimer();
+            setState(() => _inCalling = true);
+          }
           
           // Log audio track details
-          final settings = await event.track.getSettings();
-          debugPrint('Remote audio track settings: $settings');
+          try {
+            final settings = await event.track.getSettings();
+            debugPrint('Remote audio track settings: $settings');
+          } on UnimplementedError catch (e, st) {
+            debugPrint('Remote track getSettings not implemented: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error getting remote track settings: $e\n$st');
+          }
+          
+          debugPrint('Remote audio track setup completed');
         }
       };
 
       // Enhanced ICE candidate handling
       _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) async {
-        debugPrint('New ICE candidate: ${candidate.candidate != null}');
-        if (candidate.candidate == null) return;
+        if (candidate.candidate == null || candidate.candidate!.isEmpty) {
+          debugPrint('ICE candidate gathering completed');
+          return;
+        }
+
+        debugPrint('New ICE candidate: ${candidate.sdpMid} - ${candidate.candidate?.substring(0, candidate.candidate!.length > 50 ? 50 : candidate.candidate!.length)}');
         
         try {
           final collection = widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
@@ -255,21 +325,43 @@ class _CallScreenState extends State<CallScreen> {
               'sdpMLineIndex': candidate.sdpMLineIndex,
               'sdpMid': candidate.sdpMid,
             });
-            debugPrint('ICE candidate added to Firestore');
+            debugPrint('ICE candidate added to Firestore: $collection');
           }
-        } catch (e) {
-          debugPrint('Error saving ICE candidate: $e');
+        } catch (e, st) {
+          debugPrint('Error adding ICE candidate: $e\n$st');
         }
       };
 
-      // Handle ICE connection state changes
+      // Handle ICE connection state changes (merged handlers)
       _peerConnection?.onIceConnectionState = (state) {
         debugPrint('ICE Connection State: $state');
-        if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        if (state == RTCIceConnectionState.RTCIceConnectionStateChecking) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Establishing connection...')),
+            );
+          }
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+                   state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+          debugPrint('ICE Connection established');
+          // Ensure remote audio is playing when connection is established
+          if (_remoteRenderer.srcObject != null) {
+            final audioTracks = _remoteRenderer.srcObject!.getAudioTracks();
+            for (var track in audioTracks) {
+              track.enabled = true;
+              debugPrint('Ensured remote audio track enabled after ICE connection: ${track.id}');
+            }
+            // Re-configure audio output
+            Helper.setSpeakerphoneOn(_isSpeakerOn).catchError((e) {
+              debugPrint('Error setting speaker after ICE connection: $e');
+            });
+          }
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
           debugPrint('ICE Connection failed - attempting reconnection');
           _attemptReconnection();
-        } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
-          debugPrint('ICE Connection established');
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+          debugPrint('ICE Connection disconnected - attempting reconnection');
+          _attemptReconnection();
         }
       };
 
@@ -278,7 +370,23 @@ class _CallScreenState extends State<CallScreen> {
         debugPrint('Connection state: $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
           debugPrint('WebRTC connection established');
-          if (!_inCalling) {
+          // Ensure audio tracks are enabled
+          if (_localStream != null) {
+            for (var track in _localStream!.getAudioTracks()) {
+              track.enabled = !_isMuted;
+            }
+          }
+          if (_remoteRenderer.srcObject != null) {
+            for (var track in _remoteRenderer.srcObject!.getAudioTracks()) {
+              track.enabled = true;
+              debugPrint('Remote audio track enabled after connection: ${track.id}');
+            }
+            // Configure audio output
+            Helper.setSpeakerphoneOn(_isSpeakerOn).catchError((e) {
+              debugPrint('Error setting speaker after connection: $e');
+            });
+          }
+          if (!_inCalling && mounted) {
             _startCallTimer();
             setState(() => _inCalling = true);
           }
@@ -291,18 +399,6 @@ class _CallScreenState extends State<CallScreen> {
         } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
           debugPrint('WebRTC connection closed');
           _hangUp();
-        }
-      };
-      
-      // Add connection monitoring
-      _peerConnection?.onIceConnectionState = (state) {
-        debugPrint('ICE Connection State: $state');
-        if (state == RTCIceConnectionState.RTCIceConnectionStateChecking) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Establishing connection...')),
-            );
-          }
         }
       };
 
@@ -346,36 +442,91 @@ class _CallScreenState extends State<CallScreen> {
       }
 
       debugPrint('Setting remote description from offer...');
-      await _peerConnection!.setRemoteDescription(
-          RTCSessionDescription(offer['sdp'], offer['type']));
-      debugPrint('Remote description set successfully');
+      try {
+        // Modify offer SDP to ensure audio is properly configured
+        String offerSdp = offer['sdp'] ?? '';
+        // Ensure audio direction allows sending and receiving
+        if (offerSdp.contains('a=recvonly') && !offerSdp.contains('a=sendrecv')) {
+          offerSdp = offerSdp.replaceAll('a=recvonly', 'a=sendrecv');
+        }
+        if (offerSdp.contains('a=sendonly') && !offerSdp.contains('a=sendrecv')) {
+          offerSdp = offerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+        }
+        
+        final remoteDesc = RTCSessionDescription(offerSdp, offer['type']);
+        await _peerConnection!.setRemoteDescription(remoteDesc);
+        debugPrint('Remote description set successfully');
+      } catch (e) {
+        debugPrint('Error setting remote description from offer: $e');
+      }
 
       debugPrint('Creating answer...');
+      // Create answer with proper audio configuration
       final answer = await _peerConnection!.createAnswer({
         'offerToReceiveAudio': true,
         'offerToReceiveVideo': false,
       });
+      
+      // Modify SDP to ensure audio is properly configured
+      String modifiedSdp = answer.sdp ?? '';
+      // Ensure audio is not muted in SDP
+      if (modifiedSdp.contains('a=sendonly')) {
+        modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
+      }
+      if (modifiedSdp.contains('a=recvonly') && !modifiedSdp.contains('a=sendrecv')) {
+        // Ensure we can both send and receive audio
+        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+      }
+      
+      final modifiedAnswer = RTCSessionDescription(modifiedSdp, answer.type);
+      
       debugPrint('Answer created, setting local description...');
-      await _peerConnection!.setLocalDescription(answer);
+      await _peerConnection!.setLocalDescription(modifiedAnswer);
       debugPrint('Local description set successfully');
 
       debugPrint('Updating call document with answer...');
       await callDoc.update({
-        'answer': {'sdp': answer.sdp, 'type': answer.type},
+        'answer': {'sdp': modifiedSdp, 'type': modifiedAnswer.type},
         'state': 'answered',
       });
 
+      // Only listen for caller candidates after remote description is set
       _callerCandidatesSub =
           callDoc.collection('callerCandidates').snapshots().listen((snapshot) {
         for (final change in snapshot.docChanges) {
           if (change.type == DocumentChangeType.added) {
             final data = change.doc.data();
-            if (data != null) {
-              _peerConnection!.addCandidate(RTCIceCandidate(
-                data['candidate'],
-                data['sdpMid'],
-                data['sdpMLineIndex'],
-              ));
+            if (data != null && _peerConnection != null) {
+              try {
+                // Only add candidates after remote description is set
+                if (_peerConnection!.remoteDescription != null) {
+                  _peerConnection!.addCandidate(RTCIceCandidate(
+                    data['candidate'],
+                    data['sdpMid'],
+                    data['sdpMLineIndex'],
+                  ));
+                  debugPrint('Added caller ICE candidate after remote description set');
+                } else {
+                  debugPrint('Skipping ICE candidate - remote description not set yet');
+                  // Store candidate to add later
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (_peerConnection?.remoteDescription != null) {
+                      try {
+                        _peerConnection!.addCandidate(RTCIceCandidate(
+                          data['candidate'],
+                          data['sdpMid'],
+                          data['sdpMLineIndex'],
+                        ));
+                        debugPrint('Added stored caller ICE candidate');
+                      } catch (e) {
+                        debugPrint('Error adding stored ICE candidate: $e');
+                      }
+                    }
+                  });
+                }
+              } catch (e, st) {
+                debugPrint('Error adding ICE candidate (callee side): $e\n$st');
+              }
             }
           }
         }
@@ -395,19 +546,32 @@ class _CallScreenState extends State<CallScreen> {
       _startCallTimeout();
 
       debugPrint('Creating WebRTC offer...');
+      // Create offer with proper audio configuration
       final offer = await _peerConnection!.createOffer({
         'offerToReceiveAudio': true,
         'offerToReceiveVideo': false,
       });
+      
+      // Modify SDP to ensure audio is properly configured
+      String modifiedSdp = offer.sdp ?? '';
+      // Ensure audio direction is sendrecv (send and receive)
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        // Replace any restrictive audio directions
+        modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
+        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+      }
+      
+      final modifiedOffer = RTCSessionDescription(modifiedSdp, offer.type);
+      
       debugPrint('Offer created, setting local description...');
-      await _peerConnection!.setLocalDescription(offer);
+      await _peerConnection!.setLocalDescription(modifiedOffer);
       debugPrint('Local description set successfully');
 
       final callData = {
         'callerId': widget.callerId,
         'calleeId': widget.calleeId,
         'callerName': widget.calleeName,
-        'offer': {'sdp': offer.sdp, 'type': offer.type},
+        'offer': {'sdp': modifiedSdp, 'type': modifiedOffer.type},
         'state': 'offer',
         'createdAt': FieldValue.serverTimestamp(),
         'platform': {
@@ -428,24 +592,83 @@ class _CallScreenState extends State<CallScreen> {
         if (data == null) return;
         if (data['answer'] != null && !_remoteDescSet) {
           final answer = data['answer'];
-          await _peerConnection!
-              .setRemoteDescription(RTCSessionDescription(answer['sdp'], answer['type']));
-          _remoteDescSet = true;
-          setState(() => _inCalling = true);
+          try {
+            debugPrint('Setting remote description from answer...');
+            
+            // Modify answer SDP to ensure audio is properly configured
+            String answerSdp = answer['sdp'] ?? '';
+            // Ensure audio direction allows receiving
+            if (answerSdp.contains('a=sendonly') && !answerSdp.contains('a=sendrecv')) {
+              answerSdp = answerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+            }
+            
+            final remoteDesc = RTCSessionDescription(answerSdp, answer['type']);
+            await _peerConnection!.setRemoteDescription(remoteDesc);
+            _remoteDescSet = true;
+            debugPrint('Remote description set successfully from answer');
+            
+            // After setting remote description, ensure audio tracks are enabled
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (_localStream != null) {
+                for (var track in _localStream!.getAudioTracks()) {
+                  track.enabled = !_isMuted;
+                  debugPrint('Local audio track enabled: ${track.id}');
+                }
+              }
+              
+              // Configure audio output
+              Helper.setSpeakerphoneOn(_isSpeakerOn).catchError((e) {
+                debugPrint('Error setting speaker: $e');
+              });
+              
+              if (mounted) {
+                setState(() => _inCalling = true);
+                _startCallTimer();
+              }
+            });
+          } catch (e) {
+            debugPrint('Error setting remote description from answer: $e');
+          }
         }
       });
 
+      // Only listen for callee candidates after remote description is set
       _calleeCandidatesSub =
           callDoc.collection('calleeCandidates').snapshots().listen((snap) {
         for (final doc in snap.docChanges) {
           if (doc.type == DocumentChangeType.added) {
             final data = doc.doc.data();
-            if (data != null) {
-              _peerConnection?.addCandidate(RTCIceCandidate(
-                data['candidate'],
-                data['sdpMid'],
-                data['sdpMLineIndex'],
-              ));
+            if (data != null && _peerConnection != null) {
+              try {
+                // Only add candidates after remote description is set
+                if (_peerConnection!.remoteDescription != null) {
+                  _peerConnection!.addCandidate(RTCIceCandidate(
+                    data['candidate'],
+                    data['sdpMid'],
+                    data['sdpMLineIndex'],
+                  ));
+                  debugPrint('Added callee ICE candidate after remote description set');
+                } else {
+                  debugPrint('Skipping ICE candidate - remote description not set yet');
+                  // Store candidate to add later
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (_peerConnection?.remoteDescription != null) {
+                      try {
+                        _peerConnection!.addCandidate(RTCIceCandidate(
+                          data['candidate'],
+                          data['sdpMid'],
+                          data['sdpMLineIndex'],
+                        ));
+                        debugPrint('Added stored callee ICE candidate');
+                      } catch (e) {
+                        debugPrint('Error adding stored ICE candidate: $e');
+                      }
+                    }
+                  });
+                }
+              } catch (e) {
+                debugPrint('Error adding ICE candidate (caller side): $e');
+              }
             }
           }
         }
@@ -502,8 +725,12 @@ class _CallScreenState extends State<CallScreen> {
 
       // Re-configure audio output
       try {
-        await Helper.setSpeakerphoneOn(_isSpeakerOn);
-        debugPrint('Reconfigured audio output');
+        try {
+          await Helper.setSpeakerphoneOn(_isSpeakerOn);
+          debugPrint('Reconfigured audio output');
+        } on UnimplementedError catch (e) {
+          debugPrint('setSpeakerphoneOn not implemented during reconnection: $e');
+        }
       } catch (e) {
         debugPrint('Audio output reconfiguration failed: $e');
       }
@@ -760,7 +987,11 @@ class _CallScreenState extends State<CallScreen> {
                     onPressed: () async {
                       try {
                         final newState = !_isSpeakerOn;
-                        await Helper.setSpeakerphoneOn(newState);
+                        try {
+                          await Helper.setSpeakerphoneOn(newState);
+                        } on UnimplementedError catch (e) {
+                          debugPrint('setSpeakerphoneOn not implemented: $e');
+                        }
                         if (mounted) {
                           setState(() => _isSpeakerOn = newState);
                         }
@@ -783,15 +1014,27 @@ class _CallScreenState extends State<CallScreen> {
                     if (_localStream != null) {
                       final tracks = _localStream!.getAudioTracks();
                       for (var track in tracks) {
-                        final settings = await track.getSettings();
-                        debugPrint('Local track ${track.id} settings: $settings');
+                        try {
+                          final settings = await track.getSettings();
+                          debugPrint('Local track ${track.id} settings: $settings');
+                        } on UnimplementedError catch (e) {
+                          debugPrint('Local track getSettings not implemented: $e');
+                        } catch (e) {
+                          debugPrint('Error getting local track settings: $e');
+                        }
                       }
                     }
                     if (_remoteRenderer.srcObject != null) {
                       final tracks = _remoteRenderer.srcObject!.getAudioTracks();
                       for (var track in tracks) {
-                        final settings = await track.getSettings();
-                        debugPrint('Remote track ${track.id} settings: $settings');
+                        try {
+                          final settings = await track.getSettings();
+                          debugPrint('Remote track ${track.id} settings: $settings');
+                        } on UnimplementedError catch (e) {
+                          debugPrint('Remote track getSettings not implemented: $e');
+                        } catch (e) {
+                          debugPrint('Error getting remote track settings: $e');
+                        }
                       }
                     }
                   },
@@ -815,8 +1058,16 @@ class _CallScreenState extends State<CallScreen> {
                 TextButton(
                   child: const Text('Toggle Audio Route'),
                   onPressed: () async {
-                    await Helper.setSpeakerphoneOn(!_isSpeakerOn);
-                    setState(() => _isSpeakerOn = !_isSpeakerOn);
+                    try {
+                      try {
+                        await Helper.setSpeakerphoneOn(!_isSpeakerOn);
+                      } on UnimplementedError catch (e) {
+                        debugPrint('setSpeakerphoneOn not implemented: $e');
+                      }
+                      setState(() => _isSpeakerOn = !_isSpeakerOn);
+                    } catch (e) {
+                      debugPrint('Toggle audio route error: $e');
+                    }
                   },
                 ),
               ],
