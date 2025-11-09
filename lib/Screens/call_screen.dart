@@ -470,34 +470,94 @@ class _CallScreenState extends State<CallScreen> {
     if (!mounted || _isHangingUp) return;
 
     try {
-      // Try to restart ICE connection
-      final description = await _peerConnection?.getLocalDescription();
-      if (description != null) {
-        await _peerConnection?.setLocalDescription(description);
+      debugPrint('Attempting to reconnect WebRTC connection...');
+
+      // First, check if peer connection is still valid
+      if (_peerConnection == null) {
+        throw Exception('PeerConnection is null');
       }
 
-      // Update call status in Firestore to trigger reconnection
+      // Try to restart ICE
+      try {
+        await _peerConnection!.restartIce();
+        debugPrint('ICE restart initiated');
+      } catch (e) {
+        debugPrint('ICE restart failed: $e');
+      }
+
+      // Re-enable all audio tracks
+      if (_localStream != null) {
+        for (var track in _localStream!.getAudioTracks()) {
+          track.enabled = true;
+          debugPrint('Re-enabled local audio track: ${track.id}');
+        }
+      }
+
+      if (_remoteRenderer.srcObject != null) {
+        for (var track in _remoteRenderer.srcObject!.getAudioTracks()) {
+          track.enabled = true;
+          debugPrint('Re-enabled remote audio track: ${track.id}');
+        }
+      }
+
+      // Re-configure audio output
+      try {
+        await Helper.setSpeakerphoneOn(_isSpeakerOn);
+        debugPrint('Reconfigured audio output');
+      } catch (e) {
+        debugPrint('Audio output reconfiguration failed: $e');
+      }
+
+      // Update call status in Firestore
       if (_callDocId != null) {
         await _firestore.collection('calls').doc(_callDocId).update({
           'reconnecting': true,
           'timestamp': FieldValue.serverTimestamp(),
+          'lastError': null,
         });
+        debugPrint('Updated call status in Firestore');
       }
 
-      // Set a timeout for reconnection
-      Future.delayed(const Duration(seconds: 10), () {
+      // Set reconnection timeout
+      Future.delayed(const Duration(seconds: 15), () async {
         if (!_inCalling && mounted && !_isHangingUp) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not reconnect. Ending call...')),
-          );
-          _hangUp();
+          debugPrint('Reconnection timeout reached');
+          try {
+            if (_callDocId != null) {
+              await _firestore.collection('calls').doc(_callDocId).update({
+                'state': 'failed',
+                'lastError': 'Reconnection timeout',
+              });
+            }
+          } catch (e) {
+            debugPrint('Error updating call state: $e');
+          }
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not reconnect. Ending call...')),
+            );
+            _hangUp();
+          }
         }
       });
+
     } catch (e) {
       debugPrint('Reconnection attempt failed: $e');
+      if (_callDocId != null) {
+        try {
+          await _firestore.collection('calls').doc(_callDocId).update({
+            'state': 'failed',
+            'lastError': e.toString(),
+          });
+        } catch (e) {
+          debugPrint('Error updating call state: $e');
+        }
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to reconnect')),
+          SnackBar(content: Text('Failed to reconnect: $e')),
         );
         _hangUp();
       }
