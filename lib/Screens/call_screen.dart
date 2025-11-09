@@ -245,118 +245,85 @@ class _CallScreenState extends State<CallScreen> {
         debugPrint('Warning: Could not apply audio constraints: $e');
       }
 
-      // Enhanced remote audio handling - CRITICAL for audio playback
+      // Enhanced remote audio handling
       _peerConnection?.onTrack = (event) async {
-        debugPrint('=== onTrack event received ===');
-        debugPrint('Track kind: ${event.track.kind}');
-        debugPrint('Streams count: ${event.streams.length}');
-        debugPrint('Track ID: ${event.track.id}');
-        
-        if (event.track.kind == 'audio') {
-          debugPrint('>>> REMOTE AUDIO TRACK RECEIVED: ${event.track.id}');
-          final stream = event.streams.isNotEmpty ? event.streams.first : null;
+        if (event.track.kind == 'audio' && event.streams.isNotEmpty) {
+          debugPrint('Remote audio track received: ${event.track.id}');
+          final stream = event.streams.first;
           
-          if (stream == null) {
-            debugPrint('ERROR: No stream in onTrack event - audio will not work!');
-            return;
-          }
-          
-          debugPrint('Remote stream ID: ${stream.id}');
-          debugPrint('Remote stream active: ${stream.active}');
-          
-          // CRITICAL: Set remote stream to renderer FIRST - required for audio playback
-          _remoteRenderer.srcObject = stream;
-          debugPrint('Remote stream set to renderer');
-          
-          // Ensure renderer is initialized
-          try {
-            await _remoteRenderer.initialize();
-            debugPrint('Remote renderer initialized');
-          } catch (e) {
-            debugPrint('Renderer already initialized or error: $e');
-          }
-          
-          // Get ALL audio tracks from the remote stream
-          final remoteAudioTracks = stream.getAudioTracks();
-          debugPrint('Found ${remoteAudioTracks.length} audio track(s) in remote stream');
-          
-          if (remoteAudioTracks.isEmpty) {
-            debugPrint('WARNING: No audio tracks found in remote stream!');
-          }
-          
-          // CRITICAL: Enable ALL remote audio tracks immediately
-          for (var track in remoteAudioTracks) {
-            // CRITICAL: Enable the track FIRST
+          // Configure remote audio track - CRITICAL for audio playback
+          final audioTracks = stream.getAudioTracks();
+          for (var track in audioTracks) {
             track.enabled = true;
-            debugPrint('>>> Enabled remote audio track: ${track.id}');
-            debugPrint('   Track enabled state: ${track.enabled}');
-            debugPrint('   Track muted: ${track.muted}');
+            debugPrint('Remote audio track enabled: ${track.id}');
             
-            // Verify it's actually enabled
-            if (!track.enabled) {
-              debugPrint('ERROR: Track ${track.id} is still disabled after enabling!');
-              // Force enable again
+            // Ensure track is unmuted
+            if (track.muted != null) {
+              // Force enable the track
               track.enabled = true;
             }
-            
-            // Monitor track state changes
-            track.onEnded = () {
-              debugPrint('WARNING: Remote audio track ended: ${track.id}');
-            };
+          }
+          
+          // Set remote stream to renderer (required for audio playback)
+          _remoteRenderer.srcObject = stream;
+          
+          // Force renderer to play audio by setting it up properly
+          try {
+            await _remoteRenderer.initialize();
+          } catch (e) {
+            debugPrint('Renderer already initialized: $e');
           }
           
           // Configure audio output immediately
-          Future<void> configureAudio() async {
-            try {
-              await Helper.setSpeakerphoneOn(_isSpeakerOn);
-              debugPrint('Audio output configured: speaker=$_isSpeakerOn');
-            } on UnimplementedError {
-              debugPrint('setSpeakerphoneOn not implemented');
-            } catch (e) {
-              debugPrint('Error configuring audio: $e');
-            }
+          try {
+            await Helper.setSpeakerphoneOn(_isSpeakerOn);
+            debugPrint('Audio output configured: speaker=$_isSpeakerOn');
+          } on UnimplementedError catch (e, st) {
+            debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error configuring audio output: $e\n$st');
           }
           
-          await configureAudio();
-          
-          // Aggressively re-enable audio tracks at intervals (critical for audio playback)
-          for (var delay in [100, 300, 600, 1000, 2000, 3000]) {
-            Future.delayed(Duration(milliseconds: delay), () {
-              if (!mounted || _isHangingUp) return;
-              
+          // Re-configure audio routing multiple times to ensure it works
+          for (var delay in [100, 300, 500, 1000]) {
+            Future.delayed(Duration(milliseconds: delay), () async {
               try {
-                final currentStream = _remoteRenderer.srcObject;
-                if (currentStream != null) {
-                  final tracks = currentStream.getAudioTracks();
-                  debugPrint('Re-checking ${tracks.length} remote audio track(s) at ${delay}ms');
-                  
-                  for (var track in tracks) {
-                    if (!track.enabled) {
-                      debugPrint('WARNING: Track ${track.id} was disabled - re-enabling!');
-                    }
+                // Re-enable remote audio track
+                for (var track in stream.getAudioTracks()) {
+                  if (!track.enabled) {
                     track.enabled = true;
-                    debugPrint('Re-enabled track ${track.id} at ${delay}ms');
+                    debugPrint('Re-enabled remote audio track at ${delay}ms: ${track.id}');
                   }
-                  
-                  // Re-configure audio output
-                  configureAudio();
+                }
+                
+                // Re-configure audio output
+                try {
+                  await Helper.setSpeakerphoneOn(_isSpeakerOn);
+                } on UnimplementedError {
+                  // Ignore - not implemented on this platform
                 }
               } catch (e) {
-                debugPrint('Error in audio maintenance at ${delay}ms: $e');
+                debugPrint('Error in delayed audio setup at ${delay}ms: $e');
               }
             });
           }
           
-          // Set call as active
           if (mounted) {
-          _startCallTimer();
-          setState(() => _inCalling = true);
-            debugPrint('Call marked as active');
+            _startCallTimer();
+            setState(() => _inCalling = true);
           }
           
-          debugPrint('=== Remote audio setup completed ===');
-        } else {
-          debugPrint('onTrack received non-audio track: ${event.track.kind}');
+          // Log audio track details
+          try {
+            final settings = event.track.getSettings();
+            debugPrint('Remote audio track settings: $settings');
+          } on UnimplementedError catch (e, st) {
+            debugPrint('Remote track getSettings not implemented: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error getting remote track settings: $e\n$st');
+          }
+          
+          debugPrint('Remote audio track setup completed');
         }
       };
 
@@ -509,8 +476,17 @@ class _CallScreenState extends State<CallScreen> {
 
       debugPrint('Setting remote description from offer...');
       try {
-        // Use offer SDP as-is first (avoid breaking SDP format)
-        final remoteDesc = RTCSessionDescription(offer['sdp'], offer['type']);
+        // Modify offer SDP to ensure audio is properly configured
+        String offerSdp = offer['sdp'] ?? '';
+        // Ensure audio direction allows sending and receiving
+        if (offerSdp.contains('a=recvonly') && !offerSdp.contains('a=sendrecv')) {
+          offerSdp = offerSdp.replaceAll('a=recvonly', 'a=sendrecv');
+        }
+        if (offerSdp.contains('a=sendonly') && !offerSdp.contains('a=sendrecv')) {
+          offerSdp = offerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+        }
+        
+        final remoteDesc = RTCSessionDescription(offerSdp, offer['type']);
         await _peerConnection!.setRemoteDescription(remoteDesc);
         _remoteDescSet = true; // Mark remote description as set for incoming calls
         debugPrint('Remote description set successfully from offer');
@@ -544,13 +520,26 @@ class _CallScreenState extends State<CallScreen> {
         'offerToReceiveVideo': false,
       });
       
+      // Modify SDP to ensure audio is properly configured
+      String modifiedSdp = answer.sdp ?? '';
+      // Ensure audio is not muted in SDP
+      if (modifiedSdp.contains('a=sendonly')) {
+        modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
+      }
+      if (modifiedSdp.contains('a=recvonly') && !modifiedSdp.contains('a=sendrecv')) {
+        // Ensure we can both send and receive audio
+        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+      }
+      
+      final modifiedAnswer = RTCSessionDescription(modifiedSdp, answer.type);
+      
       debugPrint('Answer created, setting local description...');
-      await _peerConnection!.setLocalDescription(answer);
+      await _peerConnection!.setLocalDescription(modifiedAnswer);
       debugPrint('Local description set successfully');
 
       debugPrint('Updating call document with answer...');
       await callDoc.update({
-        'answer': {'sdp': answer.sdp, 'type': answer.type},
+        'answer': {'sdp': modifiedSdp, 'type': modifiedAnswer.type},
         'state': 'answered',
       });
 
@@ -643,8 +632,19 @@ class _CallScreenState extends State<CallScreen> {
         'offerToReceiveVideo': false,
       });
       
+      // Modify SDP to ensure audio is properly configured
+      String modifiedSdp = offer.sdp ?? '';
+      // Ensure audio direction is sendrecv (send and receive)
+      if (!modifiedSdp.contains('a=sendrecv')) {
+        // Replace any restrictive audio directions
+        modifiedSdp = modifiedSdp.replaceAll('a=sendonly', 'a=sendrecv');
+        modifiedSdp = modifiedSdp.replaceAll('a=recvonly', 'a=sendrecv');
+      }
+      
+      final modifiedOffer = RTCSessionDescription(modifiedSdp, offer.type);
+      
       debugPrint('Offer created, setting local description...');
-      await _peerConnection!.setLocalDescription(offer);
+      await _peerConnection!.setLocalDescription(modifiedOffer);
       debugPrint('Local description set successfully');
       
       // CRITICAL: Ensure local audio is enabled after creating offer
@@ -669,7 +669,7 @@ class _CallScreenState extends State<CallScreen> {
         'callerId': widget.callerId,
         'calleeId': widget.calleeId,
         'callerName': widget.calleeName,
-        'offer': {'sdp': offer.sdp, 'type': offer.type},
+        'offer': {'sdp': modifiedSdp, 'type': modifiedOffer.type},
         'state': 'offer',
         'createdAt': FieldValue.serverTimestamp(),
         'platform': {
@@ -693,8 +693,14 @@ class _CallScreenState extends State<CallScreen> {
           try {
             debugPrint('Setting remote description from answer...');
             
-            // Use answer SDP as-is (avoid breaking SDP format)
-            final remoteDesc = RTCSessionDescription(answer['sdp'], answer['type']);
+            // Modify answer SDP to ensure audio is properly configured
+            String answerSdp = answer['sdp'] ?? '';
+            // Ensure audio direction allows receiving
+            if (answerSdp.contains('a=sendonly') && !answerSdp.contains('a=sendrecv')) {
+              answerSdp = answerSdp.replaceAll('a=sendonly', 'a=sendrecv');
+            }
+            
+            final remoteDesc = RTCSessionDescription(answerSdp, answer['type']);
             await _peerConnection!.setRemoteDescription(remoteDesc);
             _remoteDescSet = true;
             debugPrint('Remote description set successfully from answer');
