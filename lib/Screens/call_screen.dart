@@ -54,7 +54,18 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _initializeRenderer();
+    _initializeAudio();
     _requestPermissions();
+  }
+
+  Future<void> _initializeAudio() async {
+    try {
+      // Set default audio settings
+      setState(() => _isSpeakerOn = true);
+      await Helper.setSpeakerphoneOn(true);
+    } catch (e) {
+      debugPrint('Error initializing audio: $e');
+    }
   }
 
   Future<void> _initializeRenderer() async {
@@ -98,20 +109,15 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     try {
-      // ✅ Initialize audio system for Android
-      await Helper.setSpeakerphoneOn(true);
+      // Initialize WebRTC
+      if (WebRTC.platformIsAndroid) {
+        await WebRTC.initialize(options: {'enableHardwareAcceleration': true});
+      }
 
-      // Get user media with optimized audio settings
+      // Get user media with basic audio settings
       final Map<String, dynamic> mediaConstraints = {
-        'audio': {
-          'echoCancellation': true,
-          'noiseSuppression': true,
-          'autoGainControl': true,
-          'channelCount': 1,
-          'sampleRate': 48000,
-          'sampleSize': 16,
-        },
-        'video': false,
+        'audio': true,
+        'video': false
       };
 
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
@@ -121,19 +127,16 @@ class _CallScreenState extends State<CallScreen> {
       }
 
       // Create peer connection with optimized configuration
-      final configuration = <String, dynamic>{
+      final Map<String, dynamic> configuration = {
         'iceServers': [
-          {'urls': ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']},
           {
-            'urls': ['turn:turn.anyfirewall.com:443?transport=tcp'],
-            'username': 'webrtc',
-            'credential': 'webrtc'
+            'urls': [
+              'stun:stun1.l.google.com:19302',
+              'stun:stun2.l.google.com:19302',
+            ],
           }
         ],
-        'iceTransportPolicy': 'all',
-        'bundlePolicy': 'max-bundle',
-        'rtcpMuxPolicy': 'require',
-        'sdpSemantics': 'unified-plan'
+        'sdpSemantics': 'unified-plan',
       };
       _peerConnection = await createPeerConnection(configuration);
 
@@ -141,15 +144,8 @@ class _CallScreenState extends State<CallScreen> {
       final audioTrack = audioTracks.first;
       await _peerConnection?.addTrack(audioTrack, _localStream!);
       
-      // Configure audio processing
+      // Enable the audio track
       audioTrack.enabled = true;
-      
-      // Apply audio optimizations through the track constraints
-      await audioTrack.applyConstraints({
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true,
-      });
 
       // ✅ Handle remote audio
       _peerConnection?.onTrack = (event) async {
@@ -614,8 +610,25 @@ class _CallScreenState extends State<CallScreen> {
                     label: 'Speaker',
                     isActive: _isSpeakerOn,
                     onPressed: () async {
-                      setState(() => _isSpeakerOn = !_isSpeakerOn);
-                      await Helper.setSpeakerphoneOn(_isSpeakerOn);
+                      try {
+                        final newState = !_isSpeakerOn;
+                        await Helper.setSpeakerphoneOn(newState);
+                        if (mounted) {
+                          setState(() => _isSpeakerOn = newState);
+                        }
+                        // Re-route audio through the selected output
+                        if (_localStream != null) {
+                          final audioTracks = _localStream!.getAudioTracks();
+                          for (var track in audioTracks) {
+                            track.enabled = true;
+                          }
+                        }
+                      } catch (e) {
+                        debugPrint('Error toggling speaker: $e');
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Failed to change audio output')),
+                        );
+                      }
                     },
                   ),
                 ],

@@ -62,13 +62,25 @@ class IncomingCallScreen extends StatelessWidget {
                     backgroundColor: Colors.red,
                     onPressed: () async {
                       try {
-                        await FirebaseFirestore.instance.collection('calls').doc(callId).update({
+                        final callRef = FirebaseFirestore.instance.collection('calls').doc(callId);
+                        await callRef.update({
                           'state': 'rejected',
+                          'endedAt': FieldValue.serverTimestamp(),
                         });
+                        // Clean up ICE candidates
+                        final callerCandidates = await callRef.collection('callerCandidates').get();
+                        for (var doc in callerCandidates.docs) {
+                          await doc.reference.delete();
+                        }
+                        final calleeCandidates = await callRef.collection('calleeCandidates').get();
+                        for (var doc in calleeCandidates.docs) {
+                          await doc.reference.delete();
+                        }
+                        await callRef.delete();
                       } catch (e) {
                         debugPrint('Error rejecting call: $e');
                       }
-                      Navigator.pop(context, false);
+                      if (context.mounted) Navigator.pop(context, false);
                     },
                     child: const Icon(Icons.call_end, color: Colors.white),
                   ),
