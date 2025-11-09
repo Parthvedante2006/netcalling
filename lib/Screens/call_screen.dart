@@ -158,13 +158,13 @@ class _CallScreenState extends State<CallScreen> {
       for (var track in audioTracks) {
         track.enabled = true;
         try {
-          final settings = await track.getSettings();
+          final settings = track.getSettings();
           debugPrint('Audio track settings: $settings');
         } on UnimplementedError catch (e, st) {
-            debugPrint('getSettings not implemented on this platform: $e\n$st');
-          } catch (e, st) {
-            debugPrint('Error reading audio track settings: $e\n$st');
-          }
+          debugPrint('getSettings not implemented on this platform: $e\n$st');
+        } catch (e, st) {
+          debugPrint('Error reading audio track settings: $e\n$st');
+        }
       }
 
       // Create peer connection with optimized configuration
@@ -232,7 +232,7 @@ class _CallScreenState extends State<CallScreen> {
           final audioTracks = stream.getAudioTracks();
           for (var track in audioTracks) {
             track.enabled = true;
-            debugPrint('Remote audio track enabled: ${track.id}, readyState: ${track.readyState}');
+            debugPrint('Remote audio track enabled: ${track.id}');
             
             // Ensure track is unmuted
             if (track.muted != null) {
@@ -254,7 +254,7 @@ class _CallScreenState extends State<CallScreen> {
           // Configure audio output immediately
           try {
             await Helper.setSpeakerphoneOn(_isSpeakerOn);
-            debugPrint('Audio output configured: speaker=${_isSpeakerOn}');
+            debugPrint('Audio output configured: speaker=$_isSpeakerOn');
           } on UnimplementedError catch (e, st) {
             debugPrint('setSpeakerphoneOn not implemented: $e\n$st');
           } catch (e, st) {
@@ -276,8 +276,8 @@ class _CallScreenState extends State<CallScreen> {
                 // Re-configure audio output
                 try {
                   await Helper.setSpeakerphoneOn(_isSpeakerOn);
-                } on UnimplementedError catch (e) {
-                  // Ignore
+                } on UnimplementedError {
+                  // Ignore - not implemented on this platform
                 }
               } catch (e) {
                 debugPrint('Error in delayed audio setup at ${delay}ms: $e');
@@ -292,7 +292,7 @@ class _CallScreenState extends State<CallScreen> {
           
           // Log audio track details
           try {
-            final settings = await event.track.getSettings();
+            final settings = event.track.getSettings();
             debugPrint('Remote audio track settings: $settings');
           } on UnimplementedError catch (e, st) {
             debugPrint('Remote track getSettings not implemented: $e\n$st');
@@ -455,6 +455,7 @@ class _CallScreenState extends State<CallScreen> {
         
         final remoteDesc = RTCSessionDescription(offerSdp, offer['type']);
         await _peerConnection!.setRemoteDescription(remoteDesc);
+        _remoteDescSet = true; // Mark remote description as set for incoming calls
         debugPrint('Remote description set successfully');
       } catch (e) {
         debugPrint('Error setting remote description from offer: $e');
@@ -499,7 +500,8 @@ class _CallScreenState extends State<CallScreen> {
             if (data != null && _peerConnection != null) {
               try {
                 // Only add candidates after remote description is set
-                if (_peerConnection!.remoteDescription != null) {
+                // Use _remoteDescSet flag since remoteDescription property doesn't exist
+                if (_remoteDescSet) {
                   _peerConnection!.addCandidate(RTCIceCandidate(
                     data['candidate'],
                     data['sdpMid'],
@@ -510,7 +512,7 @@ class _CallScreenState extends State<CallScreen> {
                   debugPrint('Skipping ICE candidate - remote description not set yet');
                   // Store candidate to add later
                   Future.delayed(const Duration(milliseconds: 500), () {
-                    if (_peerConnection?.remoteDescription != null) {
+                    if (_remoteDescSet && _peerConnection != null) {
                       try {
                         _peerConnection!.addCandidate(RTCIceCandidate(
                           data['candidate'],
@@ -641,7 +643,8 @@ class _CallScreenState extends State<CallScreen> {
             if (data != null && _peerConnection != null) {
               try {
                 // Only add candidates after remote description is set
-                if (_peerConnection!.remoteDescription != null) {
+                // Use _remoteDescSet flag since remoteDescription property doesn't exist
+                if (_remoteDescSet) {
                   _peerConnection!.addCandidate(RTCIceCandidate(
                     data['candidate'],
                     data['sdpMid'],
@@ -652,7 +655,7 @@ class _CallScreenState extends State<CallScreen> {
                   debugPrint('Skipping ICE candidate - remote description not set yet');
                   // Store candidate to add later
                   Future.delayed(const Duration(milliseconds: 500), () {
-                    if (_peerConnection?.remoteDescription != null) {
+                    if (_remoteDescSet && _peerConnection != null) {
                       try {
                         _peerConnection!.addCandidate(RTCIceCandidate(
                           data['candidate'],
@@ -1010,12 +1013,12 @@ class _CallScreenState extends State<CallScreen> {
               [
                 TextButton(
                   child: const Text('Check Audio Tracks'),
-                  onPressed: () async {
+                  onPressed: () {
                     if (_localStream != null) {
                       final tracks = _localStream!.getAudioTracks();
                       for (var track in tracks) {
                         try {
-                          final settings = await track.getSettings();
+                          final settings = track.getSettings();
                           debugPrint('Local track ${track.id} settings: $settings');
                         } on UnimplementedError catch (e) {
                           debugPrint('Local track getSettings not implemented: $e');
@@ -1028,7 +1031,7 @@ class _CallScreenState extends State<CallScreen> {
                       final tracks = _remoteRenderer.srcObject!.getAudioTracks();
                       for (var track in tracks) {
                         try {
-                          final settings = await track.getSettings();
+                          final settings = track.getSettings();
                           debugPrint('Remote track ${track.id} settings: $settings');
                         } on UnimplementedError catch (e) {
                           debugPrint('Remote track getSettings not implemented: $e');
@@ -1106,7 +1109,7 @@ class _CallScreenState extends State<CallScreen> {
                   ),
                 ),
               );
-            }).toList(),
+            }),
           ],
         ),
       ),
