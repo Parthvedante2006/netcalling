@@ -553,112 +553,81 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final callStatus = widget.isIncoming
-        ? (_inCalling
-            ? 'Connected'
-            : 'Answering call from ${widget.calleeName}...')
-        : (_inCalling ? 'Connected' : 'Calling ${widget.calleeName}...');
-
     return Scaffold(
-      backgroundColor: const Color(0xFF1C1C1E),
-      body: SafeArea(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: Text('Debug Call: ${widget.calleeName}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.call_end),
+            color: Colors.red,
+            onPressed: _hangUp,
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).primaryColor.withAlpha(51),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        widget.calleeName[0].toUpperCase(),
-                        style: const TextStyle(
-                            fontSize: 48,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(widget.calleeName,
-                      style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white)),
-                  const SizedBox(height: 8),
-                  Text(callStatus,
-                      style:
-                          const TextStyle(fontSize: 16, color: Colors.white70)),
-                  if (_inCalling) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        _callDuration,
-                        style: const TextStyle(
-                            fontSize: 14, color: Colors.white54),
-                      ),
-                    ),
-                    if (_networkStatus != 'Checking...') ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _packetLoss > 10 
-                              ? Colors.red.withOpacity(0.2)
-                              : _packetLoss > 5 
-                                  ? Colors.orange.withOpacity(0.2)
-                                  : Colors.green.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _packetLoss > 10 
-                                  ? Icons.signal_cellular_connected_no_internet_4_bar
-                                  : _packetLoss > 5 
-                                      ? Icons.signal_cellular_alt_2_bar
-                                      : Icons.signal_cellular_alt,
-                              size: 16,
-                              color: Colors.white70,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _networkStatus,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.white70,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ],
-              ),
+            // Connection Status Section
+            _buildDebugSection(
+              'Connection Status',
+              [
+                'Call State: ${_inCalling ? "Connected" : "Connecting"}',
+                'Connection: $_networkStatus',
+                'Packet Loss: $_packetLoss%',
+                'Call Duration: $_callDuration',
+                'Remote Description Set: $_remoteDescSet',
+              ],
             ),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
-              decoration: BoxDecoration(
-                color: Colors.black.withAlpha(128),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(32)),
-              ),
+
+            // Local Stream Info
+            _buildDebugSection(
+              'Local Stream',
+              [
+                if (_localStream != null) ...[
+                  'Active: ${_localStream?.active}',
+                  'ID: ${_localStream?.id}',
+                  ..._localStream!.getAudioTracks().map((track) => 
+                    'Audio Track: ${track.id} (enabled: ${track.enabled})')
+                ] else
+                  'No Local Stream',
+              ],
+            ),
+
+            // Remote Stream Info
+            _buildDebugSection(
+              'Remote Stream',
+              [
+                if (_remoteRenderer.srcObject != null) ...[
+                  'Active: ${_remoteRenderer.srcObject?.active}',
+                  'ID: ${_remoteRenderer.srcObject?.id}',
+                  ..._remoteRenderer.srcObject!.getAudioTracks().map((track) => 
+                    'Audio Track: ${track.id} (enabled: ${track.enabled})')
+                ] else
+                  'No Remote Stream',
+              ],
+            ),
+
+            // Audio Controls
+            _buildDebugSection(
+              'Audio Controls',
+              [
+                'Muted: $_isMuted',
+                'Speaker: $_isSpeakerOn',
+              ],
+            ),
+
+            // Control Buttons
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  _buildControlButton(
-                    icon: _isMuted ? Icons.mic_off : Icons.mic,
-                    label: 'Mute',
-                    isActive: _isMuted,
+                  ElevatedButton.icon(
+                    icon: Icon(_isMuted ? Icons.mic_off : Icons.mic),
+                    label: Text(_isMuted ? 'Unmute' : 'Mute'),
                     onPressed: () {
                       if (_localStream != null) {
                         final track = _localStream!.getAudioTracks().first;
@@ -667,20 +636,9 @@ class _CallScreenState extends State<CallScreen> {
                       }
                     },
                   ),
-                  Container(
-                    decoration: const BoxDecoration(
-                        color: Colors.red, shape: BoxShape.circle),
-                    child: IconButton(
-                      icon: const Icon(Icons.call_end, color: Colors.white),
-                      iconSize: 36,
-                      onPressed: _hangUp,
-                    ),
-                  ),
-                  _buildControlButton(
-                    icon:
-                        _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
-                    label: 'Speaker',
-                    isActive: _isSpeakerOn,
+                  ElevatedButton.icon(
+                    icon: Icon(_isSpeakerOn ? Icons.volume_up : Icons.volume_down),
+                    label: Text(_isSpeakerOn ? 'Speaker On' : 'Speaker Off'),
                     onPressed: () async {
                       try {
                         final newState = !_isSpeakerOn;
@@ -688,24 +646,98 @@ class _CallScreenState extends State<CallScreen> {
                         if (mounted) {
                           setState(() => _isSpeakerOn = newState);
                         }
-                        // Re-route audio through the selected output
-                        if (_localStream != null) {
-                          final audioTracks = _localStream!.getAudioTracks();
-                          for (var track in audioTracks) {
-                            track.enabled = true;
-                          }
-                        }
                       } catch (e) {
-                        debugPrint('Error toggling speaker: $e');
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Failed to change audio output')),
-                        );
+                        debugPrint('Speaker toggle error: $e');
                       }
                     },
                   ),
                 ],
               ),
             ),
+
+            // Debug Actions
+            _buildDebugSection(
+              'Debug Actions',
+              [
+                TextButton(
+                  child: const Text('Check Audio Tracks'),
+                  onPressed: () async {
+                    if (_localStream != null) {
+                      final tracks = _localStream!.getAudioTracks();
+                      for (var track in tracks) {
+                        final settings = await track.getSettings();
+                        debugPrint('Local track ${track.id} settings: $settings');
+                      }
+                    }
+                    if (_remoteRenderer.srcObject != null) {
+                      final tracks = _remoteRenderer.srcObject!.getAudioTracks();
+                      for (var track in tracks) {
+                        final settings = await track.getSettings();
+                        debugPrint('Remote track ${track.id} settings: $settings');
+                      }
+                    }
+                  },
+                ),
+                TextButton(
+                  child: const Text('Re-enable Audio Tracks'),
+                  onPressed: () {
+                    if (_localStream != null) {
+                      for (var track in _localStream!.getAudioTracks()) {
+                        track.enabled = true;
+                      }
+                    }
+                    if (_remoteRenderer.srcObject != null) {
+                      for (var track in _remoteRenderer.srcObject!.getAudioTracks()) {
+                        track.enabled = true;
+                      }
+                    }
+                    setState(() => _isMuted = false);
+                  },
+                ),
+                TextButton(
+                  child: const Text('Toggle Audio Route'),
+                  onPressed: () async {
+                    await Helper.setSpeakerphoneOn(!_isSpeakerOn);
+                    setState(() => _isSpeakerOn = !_isSpeakerOn);
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDebugSection(String title, List<dynamic> items) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Divider(),
+            ...items.map((item) {
+              if (item is Widget) return item;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  item.toString(),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                  ),
+                ),
+              );
+            }).toList(),
           ],
         ),
       ),
