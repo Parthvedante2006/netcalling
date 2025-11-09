@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'call_screen.dart';
+import './call_screen.dart';
 
 class IncomingCallScreen extends StatefulWidget {
   final String callId;
@@ -137,19 +137,22 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
       if (!mounted) return;
 
-      Navigator.pop(context, true);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => CallScreen(
-            callerId: widget.callerId,
-            calleeId: widget.calleeId,
-            calleeName: widget.callerName,
-            isIncoming: true,
-            callId: widget.callId,
+      debugPrint('Transitioning to call screen...');
+      if (mounted) {
+        Navigator.pop(context, true);
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => CallScreen(
+              callerId: widget.callerId,
+              calleeId: widget.calleeId,
+              calleeName: widget.callerName, // Using caller's name as callee name for display
+              isIncoming: true,
+              callId: widget.callId,
+            ),
           ),
-        ),
-      );
+        );
+      }
     } catch (e) {
       debugPrint('Error accepting call: $e');
       if (mounted) {
