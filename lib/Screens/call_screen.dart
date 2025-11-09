@@ -42,8 +42,13 @@ class _CallScreenState extends State<CallScreen> {
 
   DateTime? _callStartTime;
   Timer? _durationTimer;
+  Timer? _statsTimer;
   String _callDuration = '00:00';
   bool _isHangingUp = false;
+  
+  // Connection quality monitoring
+  String _networkStatus = 'Checking...';
+  int _packetLoss = 0;
 
   @override
   void initState() {
@@ -96,9 +101,16 @@ class _CallScreenState extends State<CallScreen> {
       // ✅ Initialize audio system for Android
       await Helper.setSpeakerphoneOn(true);
 
-      // Get user media - audio only
+      // Get user media with optimized audio settings
       final Map<String, dynamic> mediaConstraints = {
-        'audio': true,
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+          'channelCount': 1,
+          'sampleRate': 48000,
+          'sampleSize': 16,
+        },
         'video': false,
       };
 
@@ -108,23 +120,36 @@ class _CallScreenState extends State<CallScreen> {
         throw Exception('No audio track found');
       }
 
-      // Create peer connection
-      final configuration = {
+      // Create peer connection with optimized configuration
+      final configuration = <String, dynamic>{
         'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'},
+          {'urls': ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']},
           {
-            'urls': 'turn:turn.anyfirewall.com:443?transport=tcp',
+            'urls': ['turn:turn.anyfirewall.com:443?transport=tcp'],
             'username': 'webrtc',
             'credential': 'webrtc'
-          },
+          }
         ],
+        'iceTransportPolicy': 'all',
+        'bundlePolicy': 'max-bundle',
+        'rtcpMuxPolicy': 'require',
+        'sdpSemantics': 'unified-plan'
       };
       _peerConnection = await createPeerConnection(configuration);
 
-      // Add local audio track
+      // Optimized audio track handling
       final audioTrack = audioTracks.first;
       await _peerConnection?.addTrack(audioTrack, _localStream!);
+      
+      // Configure audio processing
       audioTrack.enabled = true;
+      
+      // Apply audio optimizations through the track constraints
+      await audioTrack.applyConstraints({
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true,
+      });
 
       // ✅ Handle remote audio
       _peerConnection?.onTrack = (event) async {
@@ -155,13 +180,36 @@ class _CallScreenState extends State<CallScreen> {
         }
       };
 
-      // Handle connection states
+      // Enhanced connection state handling
       _peerConnection?.onConnectionState = (state) {
         debugPrint('Connection state: $state');
-        if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-            state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
-            state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+          debugPrint('WebRTC connection established');
+          if (!_inCalling) {
+            _startCallTimer();
+            setState(() => _inCalling = true);
+          }
+        } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          debugPrint('WebRTC connection failed - attempting reconnection');
+          _attemptReconnection();
+        } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+          debugPrint('WebRTC disconnected - attempting reconnection');
+          _attemptReconnection();
+        } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+          debugPrint('WebRTC connection closed');
           _hangUp();
+        }
+      };
+      
+      // Add connection monitoring
+      _peerConnection?.onIceConnectionState = (state) {
+        debugPrint('ICE Connection State: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateChecking) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Establishing connection...')),
+            );
+          }
         }
       };
 
@@ -292,7 +340,45 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  void _startCallTimer() {
+  Future<void> _attemptReconnection() async {
+    if (!mounted || _isHangingUp) return;
+
+    try {
+      // Try to restart ICE connection
+      final description = await _peerConnection?.getLocalDescription();
+      if (description != null) {
+        await _peerConnection?.setLocalDescription(description);
+      }
+
+      // Update call status in Firestore to trigger reconnection
+      if (_callDocId != null) {
+        await _firestore.collection('calls').doc(_callDocId).update({
+          'reconnecting': true,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      }
+
+      // Set a timeout for reconnection
+      Future.delayed(const Duration(seconds: 10), () {
+        if (!_inCalling && mounted && !_isHangingUp) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not reconnect. Ending call...')),
+          );
+          _hangUp();
+        }
+      });
+    } catch (e) {
+      debugPrint('Reconnection attempt failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to reconnect')),
+        );
+        _hangUp();
+      }
+    }
+  }
+
+  Future<void> _startCallTimer() async {
     _callStartTime = DateTime.now();
     _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -302,6 +388,59 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _callDuration = '$minutes:$seconds';
       });
+    });
+    
+    // Start monitoring call stats
+    _startStatsMonitoring();
+  }
+
+  Future<void> _startStatsMonitoring() async {
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_peerConnection == null) return;
+
+      try {
+        // Get WebRTC stats
+        final stats = await _peerConnection!.getStats();
+        double totalPackets = 0;
+        double packetsLost = 0;
+        
+        await Future.forEach(stats, (StatsReport report) {
+          if (report.type == 'inbound-rtp' && report.values['mediaType'] == 'audio') {
+            totalPackets = (report.values['packetsReceived'] ?? 0).toDouble();
+            packetsLost = (report.values['packetsLost'] ?? 0).toDouble();
+            
+            if (totalPackets > 0) {
+              setState(() {
+                _packetLoss = ((packetsLost / totalPackets) * 100).round();
+              });
+            }
+          }
+        });
+
+        // Update network status
+        setState(() {
+          if (_packetLoss > 10) {
+            _networkStatus = 'Poor Connection';
+          } else if (_packetLoss > 5) {
+            _networkStatus = 'Fair Connection';
+          } else {
+            _networkStatus = 'Good Connection';
+          }
+        });
+
+        // Show warning for poor connection
+        if (_packetLoss > 15 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Poor network connection detected'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('Error getting WebRTC stats: $e');
+      }
     });
   }
 
@@ -339,6 +478,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    _statsTimer?.cancel();
     _hangUp();
     super.dispose();
   }
@@ -387,7 +527,7 @@ class _CallScreenState extends State<CallScreen> {
                   Text(callStatus,
                       style:
                           const TextStyle(fontSize: 16, color: Colors.white70)),
-                  if (_inCalling)
+                  if (_inCalling) ...[
                     Padding(
                       padding: const EdgeInsets.only(top: 8.0),
                       child: Text(
@@ -396,6 +536,43 @@ class _CallScreenState extends State<CallScreen> {
                             fontSize: 14, color: Colors.white54),
                       ),
                     ),
+                    if (_networkStatus != 'Checking...') ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _packetLoss > 10 
+                              ? Colors.red.withOpacity(0.2)
+                              : _packetLoss > 5 
+                                  ? Colors.orange.withOpacity(0.2)
+                                  : Colors.green.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _packetLoss > 10 
+                                  ? Icons.signal_cellular_connected_no_internet_4_bar
+                                  : _packetLoss > 5 
+                                      ? Icons.signal_cellular_alt_2_bar
+                                      : Icons.signal_cellular_alt,
+                              size: 16,
+                              color: Colors.white70,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _networkStatus,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),
