@@ -902,217 +902,252 @@ class _CallScreenState extends State<CallScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: Text('Debug Call: ${widget.calleeName}'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.call_end),
-            color: Colors.red,
-            onPressed: _hangUp,
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.grey[900]!,
+                Colors.black,
+                Colors.black,
+              ],
+            ),
           ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Connection Status Section
-            _buildDebugSection(
-              'Connection Status',
-              [
-                'Call State: ${_inCalling ? "Connected" : "Connecting"}',
-                'Connection: $_networkStatus',
-                'Packet Loss: $_packetLoss%',
-                'Call Duration: $_callDuration',
-                'Remote Description Set: $_remoteDescSet',
-              ],
-            ),
-
-            // Local Stream Info
-            _buildDebugSection(
-              'Local Stream',
-              [
-                if (_localStream != null) ...[
-                  'Active: ${_localStream?.active}',
-                  'ID: ${_localStream?.id}',
-                  ..._localStream!.getAudioTracks().map((track) => 
-                    'Audio Track: ${track.id} (enabled: ${track.enabled})')
-                ] else
-                  'No Local Stream',
-              ],
-            ),
-
-            // Remote Stream Info
-            _buildDebugSection(
-              'Remote Stream',
-              [
-                if (_remoteRenderer.srcObject != null) ...[
-                  'Active: ${_remoteRenderer.srcObject?.active}',
-                  'ID: ${_remoteRenderer.srcObject?.id}',
-                  ..._remoteRenderer.srcObject!.getAudioTracks().map((track) => 
-                    'Audio Track: ${track.id} (enabled: ${track.enabled})')
-                ] else
-                  'No Remote Stream',
-              ],
-            ),
-
-            // Audio Controls
-            _buildDebugSection(
-              'Audio Controls',
-              [
-                'Muted: $_isMuted',
-                'Speaker: $_isSpeakerOn',
-              ],
-            ),
-
-            // Control Buttons
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton.icon(
-                    icon: Icon(_isMuted ? Icons.mic_off : Icons.mic),
-                    label: Text(_isMuted ? 'Unmute' : 'Mute'),
-                    onPressed: () {
-                      if (_localStream != null) {
-                        final track = _localStream!.getAudioTracks().first;
-                        track.enabled = !track.enabled;
-                        setState(() => _isMuted = !track.enabled);
-                      }
-                    },
+          child: Column(
+            children: [
+              // Top spacing
+              const Spacer(flex: 2),
+              
+              // Caller Avatar
+              Hero(
+                tag: 'caller_avatar_${widget.calleeId}',
+                child: Container(
+                  width: 180,
+                  height: 180,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.blue[400]!,
+                        Colors.purple[400]!,
+                      ],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blue.withOpacity(0.3),
+                        blurRadius: 30,
+                        spreadRadius: 10,
+                      ),
+                    ],
                   ),
-                  ElevatedButton.icon(
-                    icon: Icon(_isSpeakerOn ? Icons.volume_up : Icons.volume_down),
-                    label: Text(_isSpeakerOn ? 'Speaker On' : 'Speaker Off'),
-                    onPressed: () async {
-                      try {
-                        final newState = !_isSpeakerOn;
-                        try {
-                          await Helper.setSpeakerphoneOn(newState);
-                        } on UnimplementedError catch (e) {
-                          debugPrint('setSpeakerphoneOn not implemented: $e');
-                        }
-                        if (mounted) {
-                          setState(() => _isSpeakerOn = newState);
-                        }
-                      } catch (e) {
-                        debugPrint('Speaker toggle error: $e');
-                      }
-                    },
+                  child: Center(
+                    child: Text(
+                      widget.calleeName.isNotEmpty 
+                          ? widget.calleeName[0].toUpperCase() 
+                          : 'C',
+                      style: const TextStyle(
+                        fontSize: 72,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
                   ),
-                ],
+                ),
               ),
-            ),
-
-            // Debug Actions
-            _buildDebugSection(
-              'Debug Actions',
-              [
-                TextButton(
-                  child: const Text('Check Audio Tracks'),
-                  onPressed: () {
-                    if (_localStream != null) {
-                      final tracks = _localStream!.getAudioTracks();
-                      for (var track in tracks) {
-                        try {
-                          final settings = track.getSettings();
-                          debugPrint('Local track ${track.id} settings: $settings');
-                        } on UnimplementedError catch (e) {
-                          debugPrint('Local track getSettings not implemented: $e');
-                        } catch (e) {
-                          debugPrint('Error getting local track settings: $e');
+              
+              const SizedBox(height: 32),
+              
+              // Caller Name
+              Text(
+                widget.calleeName,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Call Status
+              Text(
+                _inCalling ? 'Connected' : 'Connecting...',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: _inCalling ? Colors.green[300] : Colors.orange[300],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              
+              const SizedBox(height: 8),
+              
+              // Call Duration
+              if (_inCalling)
+                Text(
+                  _callDuration,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              
+              // Network Status (subtle)
+              if (_inCalling && _networkStatus != 'Good Connection')
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _networkStatus == 'Poor Connection' 
+                            ? Icons.signal_wifi_off
+                            : Icons.signal_cellular_alt,
+                        size: 16,
+                        color: Colors.orange[300],
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _networkStatus,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange[300],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              
+              const Spacer(flex: 3),
+              
+              // Control Buttons
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Mute Button
+                    _buildControlButton(
+                      icon: _isMuted ? Icons.mic_off : Icons.mic,
+                      label: 'Mute',
+                      isActive: _isMuted,
+                      onPressed: () {
+                        if (_localStream != null) {
+                          final track = _localStream!.getAudioTracks().first;
+                          track.enabled = !track.enabled;
+                          setState(() => _isMuted = !track.enabled);
                         }
-                      }
-                    }
-                    if (_remoteRenderer.srcObject != null) {
-                      final tracks = _remoteRenderer.srcObject!.getAudioTracks();
-                      for (var track in tracks) {
+                      },
+                    ),
+                    
+                    // Speaker Button
+                    _buildControlButton(
+                      icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
+                      label: 'Speaker',
+                      isActive: _isSpeakerOn,
+                      onPressed: () async {
                         try {
-                          final settings = track.getSettings();
-                          debugPrint('Remote track ${track.id} settings: $settings');
-                        } on UnimplementedError catch (e) {
-                          debugPrint('Remote track getSettings not implemented: $e');
+                          final newState = !_isSpeakerOn;
+                          try {
+                            await Helper.setSpeakerphoneOn(newState);
+                          } on UnimplementedError catch (e) {
+                            debugPrint('setSpeakerphoneOn not implemented: $e');
+                          }
+                          if (mounted) {
+                            setState(() => _isSpeakerOn = newState);
+                          }
                         } catch (e) {
-                          debugPrint('Error getting remote track settings: $e');
+                          debugPrint('Speaker toggle error: $e');
                         }
-                      }
-                    }
-                  },
+                      },
+                    ),
+                  ],
                 ),
-                TextButton(
-                  child: const Text('Re-enable Audio Tracks'),
-                  onPressed: () {
-                    if (_localStream != null) {
-                      for (var track in _localStream!.getAudioTracks()) {
-                        track.enabled = true;
-                      }
-                    }
-                    if (_remoteRenderer.srcObject != null) {
-                      for (var track in _remoteRenderer.srcObject!.getAudioTracks()) {
-                        track.enabled = true;
-                      }
-                    }
-                    setState(() => _isMuted = false);
-                  },
+              ),
+              
+              const SizedBox(height: 40),
+              
+              // Hang Up Button
+              GestureDetector(
+                onTap: _hangUp,
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.red[600],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.red.withOpacity(0.4),
+                        blurRadius: 20,
+                        spreadRadius: 5,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.call_end,
+                    color: Colors.white,
+                    size: 36,
+                  ),
                 ),
-                TextButton(
-                  child: const Text('Toggle Audio Route'),
-                  onPressed: () async {
-                    try {
-                      try {
-                        await Helper.setSpeakerphoneOn(!_isSpeakerOn);
-                      } on UnimplementedError catch (e) {
-                        debugPrint('setSpeakerphoneOn not implemented: $e');
-                      }
-                      setState(() => _isSpeakerOn = !_isSpeakerOn);
-                    } catch (e) {
-                      debugPrint('Toggle audio route error: $e');
-                    }
-                  },
-                ),
-              ],
-            ),
-          ],
+              ),
+              
+              const SizedBox(height: 60),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildDebugSection(String title, List<dynamic> items) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+  Widget _buildControlButton({
+    required IconData icon,
+    required String label,
+    required bool isActive,
+    required VoidCallback onPressed,
+  }) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onPressed,
+          child: Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isActive 
+                  ? Colors.white.withOpacity(0.2)
+                  : Colors.white.withOpacity(0.1),
+              border: Border.all(
+                color: isActive 
+                    ? Colors.white.withOpacity(0.5)
+                    : Colors.white.withOpacity(0.2),
+                width: 1.5,
               ),
             ),
-            const Divider(),
-            ...items.map((item) {
-              if (item is Widget) return item;
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Text(
-                  item.toString(),
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                  ),
-                ),
-              );
-            }),
-          ],
+            child: Icon(
+              icon,
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
         ),
-      ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.white.withOpacity(0.7),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 
