@@ -17,22 +17,34 @@ class CallService {
   }
 
   void _listenForIncomingCalls() {
-    if (_userId == null) return;
+    if (_userId == null) {
+      debugPrint('CallService: No user ID available');
+      return;
+    }
 
+    debugPrint('CallService: Starting incoming call listener for user $_userId');
     _incomingCallSubscription?.cancel();
+    
     _incomingCallSubscription = _firestore
         .collection('calls')
         .where('calleeId', isEqualTo: _userId)
         .where('state', isEqualTo: 'offer')
         .snapshots()
-        .listen((snapshot) async {
-      for (final change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          final call = change.doc.data()!;
-          await _handleIncomingCall(change.doc.id, call);
-        }
-      }
-    });
+        .listen(
+          (snapshot) async {
+            debugPrint('CallService: Received snapshot with ${snapshot.docs.length} calls');
+            for (final change in snapshot.docChanges) {
+              if (change.type == DocumentChangeType.added) {
+                debugPrint('CallService: New incoming call detected');
+                final call = change.doc.data()!;
+                await _handleIncomingCall(change.doc.id, call);
+              }
+            }
+          },
+          onError: (error) {
+            debugPrint('CallService: Error in call listener: $error');
+          },
+        );
   }
 
   Future<void> _handleIncomingCall(String callId, Map<String, dynamic> callData) async {

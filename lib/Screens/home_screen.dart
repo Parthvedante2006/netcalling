@@ -31,8 +31,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeCallService() async {
     final currentUser = FirebaseService().currentUser;
     if (currentUser != null) {
+      debugPrint('HomeScreen: Initializing CallService for user ${currentUser.uid}');
       _callService.initialize(currentUser.uid, context);
+    } else {
+      debugPrint('HomeScreen: No current user found for CallService initialization');
+      // Show a snackbar to notify the user
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error initializing call service. Please try logging in again.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Re-initialize call service when dependencies change (e.g., after navigation)
+    _initializeCallService();
   }
 
   @override

@@ -274,20 +274,28 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _makeOutgoingCall() async {
     try {
+      debugPrint('Making outgoing call to ${widget.calleeId}');
       final callDoc = _firestore.collection('calls').doc(_callDocId);
       _startCallTimeout();
 
       final offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
 
-      await callDoc.set({
+      final callData = {
         'callerId': widget.callerId,
         'calleeId': widget.calleeId,
-        'calleeName': widget.calleeName,
+        'callerName': widget.calleeName,
         'offer': {'sdp': offer.sdp, 'type': offer.type},
         'state': 'offer',
         'createdAt': FieldValue.serverTimestamp(),
-      });
+        'platform': {
+          'caller': 'android',  // or ios, web depending on platform
+          'version': '1.0.0',
+        },
+      };
+
+      debugPrint('Creating call document with ID: ${callDoc.id}');
+      await callDoc.set(callData);
 
       _callSub = callDoc.snapshots().listen((snapshot) async {
         if (!snapshot.exists) {
