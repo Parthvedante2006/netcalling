@@ -109,14 +109,30 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     try {
-      // Initialize WebRTC
+      // Initialize WebRTC with optimized settings
       if (WebRTC.platformIsAndroid) {
-        await WebRTC.initialize(options: {'enableHardwareAcceleration': true});
+        await WebRTC.initialize(options: {
+          'enableHardwareAcceleration': true,
+          'androidAudioConfiguration': {
+            'audioSource': 'voice_communication',
+            'echoCancellation': true,
+            'noiseSuppression': true,
+            'autoGainControl': true
+          }
+        });
       }
 
-      // Get user media with basic audio settings
+      // Get user media with enhanced audio settings
       final Map<String, dynamic> mediaConstraints = {
-        'audio': true,
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+          'googHighpassFilter': true,
+          'googEchoCancellation': true,
+          'googNoiseSuppression': true,
+          'googAutoGainControl': true,
+        },
         'video': false
       };
 
@@ -124,6 +140,13 @@ class _CallScreenState extends State<CallScreen> {
       final audioTracks = _localStream?.getAudioTracks();
       if (audioTracks == null || audioTracks.isEmpty) {
         throw Exception('No audio track found');
+      }
+      
+      // Enable audio processing
+      for (var track in audioTracks) {
+        track.enabled = true;
+        final settings = await track.getSettings();
+        debugPrint('Audio track settings: $settings');
       }
 
       // Create peer connection with optimized configuration
@@ -134,9 +157,28 @@ class _CallScreenState extends State<CallScreen> {
               'stun:stun1.l.google.com:19302',
               'stun:stun2.l.google.com:19302',
             ],
-          }
+          },
+          {
+            'urls': 'turn:relay.metered.ca:80',
+            'username': 'f5b151f05d214d2e060bdf1d',
+            'credential': 'QXu0WBhcGE8vLg01',
+          },
+          {
+            'urls': 'turn:relay.metered.ca:443',
+            'username': 'f5b151f05d214d2e060bdf1d',
+            'credential': 'QXu0WBhcGE8vLg01',
+          },
+          {
+            'urls': 'turn:relay.metered.ca:443?transport=tcp',
+            'username': 'f5b151f05d214d2e060bdf1d',
+            'credential': 'QXu0WBhcGE8vLg01',
+          },
         ],
         'sdpSemantics': 'unified-plan',
+        'iceTransportPolicy': 'all',
+        'bundlePolicy': 'max-bundle',
+        'rtcpMuxPolicy': 'require',
+        'iceCandidatePoolSize': 1,
       };
       _peerConnection = await createPeerConnection(configuration);
 
@@ -147,14 +189,36 @@ class _CallScreenState extends State<CallScreen> {
       // Enable the audio track
       audioTrack.enabled = true;
 
-      // ✅ Handle remote audio
+      // Enhanced remote audio handling
       _peerConnection?.onTrack = (event) async {
         if (event.track.kind == 'audio' && event.streams.isNotEmpty) {
           debugPrint('Remote audio track received');
-          _remoteRenderer.srcObject = event.streams.first;
-          await Helper.setSpeakerphoneOn(true); // Route audio to speaker
+          final stream = event.streams.first;
+          
+          // Configure remote audio track
+          final audioTracks = stream.getAudioTracks();
+          for (var track in audioTracks) {
+            track.enabled = true;
+            debugPrint('Remote audio track enabled: ${track.id}');
+          }
+          
+          // Set remote stream
+          _remoteRenderer.srcObject = stream;
+          
+          // Configure audio output
+          await Helper.setSpeakerphoneOn(_isSpeakerOn);
+          
+          // Double-check audio routing after a short delay
+          Future.delayed(const Duration(milliseconds: 500), () async {
+            await Helper.setSpeakerphoneOn(_isSpeakerOn);
+          });
+          
           _startCallTimer();
           setState(() => _inCalling = true);
+          
+          // Log audio track details
+          final settings = await event.track.getSettings();
+          debugPrint('Remote audio track settings: $settings');
         }
       };
 
