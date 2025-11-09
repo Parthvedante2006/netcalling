@@ -179,78 +179,185 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         return false;
       },
       child: Scaffold(
-        backgroundColor: Colors.black87,
+        backgroundColor: Colors.black,
         body: SafeArea(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(),
-              Hero(
-                tag: 'caller_avatar_${widget.callerId}',
-                child: CircleAvatar(
-                  radius: 60,
-                  backgroundColor: Colors.blueGrey.shade800,
-                  child: Text(
-                    widget.callerName[0].toUpperCase(),
-                    style: const TextStyle(fontSize: 40, color: Colors.white),
-                  ),
-                ),
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.grey[900]!,
+                  Colors.black,
+                  Colors.black,
+                ],
               ),
-              const SizedBox(height: 20),
-              Text(
-                widget.callerName,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 10),
-              if (_isCallActive) ...[
-                const Text(
-                  'Incoming call...',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.white70,
-                  ),
-                ),
-              ] else ...[
-                const Text(
-                  'Call ended',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.red,
-                  ),
-                ),
-              ],
-              if (_isProcessing) ...[
-                const SizedBox(height: 20),
-                const CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-              ],
-              const Spacer(),
-              if (_isCallActive) ...[
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      FloatingActionButton(
-                        backgroundColor: Colors.red,
-                        onPressed: _isProcessing ? null : _handleRejectCall,
-                        child: const Icon(Icons.call_end, color: Colors.white),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Spacer(flex: 2),
+                Hero(
+                  tag: 'caller_avatar_${widget.callerId}',
+                  child: Container(
+                    width: 180,
+                    height: 180,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.blue[400]!,
+                          Colors.purple[400]!,
+                        ],
                       ),
-                      FloatingActionButton(
-                        backgroundColor: Colors.green,
-                        onPressed: _isProcessing ? null : _handleAcceptCall,
-                        child: const Icon(Icons.call, color: Colors.white),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blue.withOpacity(0.3),
+                          blurRadius: 30,
+                          spreadRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        widget.callerName.isNotEmpty
+                            ? widget.callerName[0].toUpperCase()
+                            : 'C',
+                        style: const TextStyle(
+                          fontSize: 72,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
+                const SizedBox(height: 32),
+                Text(
+                  widget.callerName,
+                  style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_isCallActive) ...[
+                  Text(
+                    'Incoming call...',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.orange[300],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ] else ...[
+                  Text(
+                    'Call ended',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.red[300],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+                if (_isProcessing) ...[
+                  const SizedBox(height: 20),
+                  const CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ],
+                const Spacer(flex: 3),
+                if (_isCallActive) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        // Reject Button
+                        Column(
+                          children: [
+                            GestureDetector(
+                              onTap: _isProcessing ? null : _handleRejectCall,
+                              child: Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.red[600],
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.red.withOpacity(0.4),
+                                      blurRadius: 20,
+                                      spreadRadius: 5,
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.call_end,
+                                  color: Colors.white,
+                                  size: 36,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Decline',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withOpacity(0.7),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Accept Button
+                        Column(
+                          children: [
+                            GestureDetector(
+                              onTap: _isProcessing ? null : _handleAcceptCall,
+                              child: Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.green[600],
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.green.withOpacity(0.4),
+                                      blurRadius: 20,
+                                      spreadRadius: 5,
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.call,
+                                  color: Colors.white,
+                                  size: 36,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Accept',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withOpacity(0.7),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 60),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

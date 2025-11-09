@@ -161,10 +161,10 @@ class _CallScreenState extends State<CallScreen> {
           final settings = track.getSettings();
           debugPrint('Audio track settings: $settings');
         } on UnimplementedError catch (e, st) {
-          debugPrint('getSettings not implemented on this platform: $e\n$st');
-        } catch (e, st) {
-          debugPrint('Error reading audio track settings: $e\n$st');
-        }
+            debugPrint('getSettings not implemented on this platform: $e\n$st');
+          } catch (e, st) {
+            debugPrint('Error reading audio track settings: $e\n$st');
+          }
       }
 
       // Create peer connection with optimized configuration
@@ -274,8 +274,8 @@ class _CallScreenState extends State<CallScreen> {
                 }
                 
                 // Re-configure audio output
-                try {
-                  await Helper.setSpeakerphoneOn(_isSpeakerOn);
+            try {
+              await Helper.setSpeakerphoneOn(_isSpeakerOn);
                 } on UnimplementedError {
                   // Ignore - not implemented on this platform
                 }
@@ -286,8 +286,8 @@ class _CallScreenState extends State<CallScreen> {
           }
           
           if (mounted) {
-            _startCallTimer();
-            setState(() => _inCalling = true);
+          _startCallTimer();
+          setState(() => _inCalling = true);
           }
           
           // Log audio track details
@@ -312,7 +312,7 @@ class _CallScreenState extends State<CallScreen> {
         }
 
         debugPrint('New ICE candidate: ${candidate.sdpMid} - ${candidate.candidate?.substring(0, candidate.candidate!.length > 50 ? 50 : candidate.candidate!.length)}');
-        
+
         try {
           final collection = widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
           if (_callDocId != null) {
@@ -502,11 +502,11 @@ class _CallScreenState extends State<CallScreen> {
                 // Only add candidates after remote description is set
                 // Use _remoteDescSet flag since remoteDescription property doesn't exist
                 if (_remoteDescSet) {
-                  _peerConnection!.addCandidate(RTCIceCandidate(
-                    data['candidate'],
-                    data['sdpMid'],
-                    data['sdpMLineIndex'],
-                  ));
+                _peerConnection!.addCandidate(RTCIceCandidate(
+                  data['candidate'],
+                  data['sdpMid'],
+                  data['sdpMLineIndex'],
+                ));
                   debugPrint('Added caller ICE candidate after remote description set');
                 } else {
                   debugPrint('Skipping ICE candidate - remote description not set yet');
@@ -624,7 +624,7 @@ class _CallScreenState extends State<CallScreen> {
               });
               
               if (mounted) {
-                setState(() => _inCalling = true);
+            setState(() => _inCalling = true);
                 _startCallTimer();
               }
             });
@@ -638,7 +638,7 @@ class _CallScreenState extends State<CallScreen> {
       _calleeCandidatesSub =
           callDoc.collection('calleeCandidates').snapshots().listen((snap) {
         for (final doc in snap.docChanges) {
-          if (doc.type == DocumentChangeType.added) {
+            if (doc.type == DocumentChangeType.added) {
             final data = doc.doc.data();
             if (data != null && _peerConnection != null) {
               try {
@@ -646,10 +646,10 @@ class _CallScreenState extends State<CallScreen> {
                 // Use _remoteDescSet flag since remoteDescription property doesn't exist
                 if (_remoteDescSet) {
                   _peerConnection!.addCandidate(RTCIceCandidate(
-                    data['candidate'],
-                    data['sdpMid'],
-                    data['sdpMLineIndex'],
-                  ));
+                  data['candidate'],
+                  data['sdpMid'],
+                  data['sdpMLineIndex'],
+                ));
                   debugPrint('Added callee ICE candidate after remote description set');
                 } else {
                   debugPrint('Skipping ICE candidate - remote description not set yet');
@@ -663,7 +663,7 @@ class _CallScreenState extends State<CallScreen> {
                           data['sdpMLineIndex'],
                         ));
                         debugPrint('Added stored callee ICE candidate');
-                      } catch (e) {
+              } catch (e) {
                         debugPrint('Error adding stored ICE candidate: $e');
                       }
                     }
@@ -916,8 +916,8 @@ class _CallScreenState extends State<CallScreen> {
               ],
             ),
           ),
-          child: Column(
-            children: [
+        child: Column(
+          children: [
               // Top spacing
               const Spacer(flex: 2),
               
@@ -1026,51 +1026,51 @@ class _CallScreenState extends State<CallScreen> {
               
               const Spacer(flex: 3),
               
-              // Control Buttons
-              Padding(
+            // Control Buttons
+            Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
                     // Mute Button
                     _buildControlButton(
                       icon: _isMuted ? Icons.mic_off : Icons.mic,
                       label: 'Mute',
                       isActive: _isMuted,
-                      onPressed: () {
-                        if (_localStream != null) {
-                          final track = _localStream!.getAudioTracks().first;
-                          track.enabled = !track.enabled;
-                          setState(() => _isMuted = !track.enabled);
-                        }
-                      },
-                    ),
+                    onPressed: () {
+                      if (_localStream != null) {
+                        final track = _localStream!.getAudioTracks().first;
+                        track.enabled = !track.enabled;
+                        setState(() => _isMuted = !track.enabled);
+                      }
+                    },
+                  ),
                     
                     // Speaker Button
                     _buildControlButton(
                       icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
                       label: 'Speaker',
                       isActive: _isSpeakerOn,
-                      onPressed: () async {
+                    onPressed: () async {
+                      try {
+                        final newState = !_isSpeakerOn;
                         try {
-                          final newState = !_isSpeakerOn;
-                          try {
-                            await Helper.setSpeakerphoneOn(newState);
-                          } on UnimplementedError catch (e) {
-                            debugPrint('setSpeakerphoneOn not implemented: $e');
-                          }
-                          if (mounted) {
-                            setState(() => _isSpeakerOn = newState);
-                          }
-                        } catch (e) {
-                          debugPrint('Speaker toggle error: $e');
+                          await Helper.setSpeakerphoneOn(newState);
+                        } on UnimplementedError catch (e) {
+                          debugPrint('setSpeakerphoneOn not implemented: $e');
                         }
-                      },
-                    ),
-                  ],
-                ),
+                        if (mounted) {
+                          setState(() => _isSpeakerOn = newState);
+                        }
+                      } catch (e) {
+                        debugPrint('Speaker toggle error: $e');
+                      }
+                    },
+                  ),
+                ],
               ),
-              
+            ),
+
               const SizedBox(height: 40),
               
               // Hang Up Button
@@ -1113,7 +1113,7 @@ class _CallScreenState extends State<CallScreen> {
     required VoidCallback onPressed,
   }) {
     return Column(
-      children: [
+          children: [
         GestureDetector(
           onTap: onPressed,
           child: Container(

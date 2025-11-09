@@ -131,6 +131,111 @@ class FirebaseService {
     if (snapshot.docs.isEmpty) return null;
     return snapshot.docs.first;
   }
+
+  /// 🔹 Add a contact to user's contact list
+  Future<String> addContact({
+    required String contactUid,
+    required String contactName,
+    required String contactUsername,
+    required String contactEmail,
+  }) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        return 'User not authenticated';
+      }
+
+      // Check if contact already exists
+      final contactDoc = await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('contacts')
+          .doc(contactUid)
+          .get();
+
+      if (contactDoc.exists) {
+        return 'Contact already exists';
+      }
+
+      // Prevent adding yourself
+      if (contactUid == currentUser.uid) {
+        return 'Cannot add yourself as a contact';
+      }
+
+      // Add contact
+      await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('contacts')
+          .doc(contactUid)
+          .set({
+        'uid': contactUid,
+        'name': contactName,
+        'username': contactUsername,
+        'email': contactEmail,
+        'addedAt': FieldValue.serverTimestamp(),
+      });
+
+      return 'success';
+    } catch (e) {
+      return 'Error adding contact: ${e.toString()}';
+    }
+  }
+
+  /// 🔹 Get all contacts for current user
+  Stream<QuerySnapshot<Map<String, dynamic>>> getContacts() {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      throw Exception('User not authenticated');
+    }
+
+    return _firestore
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('contacts')
+        .orderBy('name')
+        .snapshots();
+  }
+
+  /// 🔹 Check if a user is already in contacts
+  Future<bool> isContact(String contactUid) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) return false;
+
+      final contactDoc = await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('contacts')
+          .doc(contactUid)
+          .get();
+
+      return contactDoc.exists;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// 🔹 Remove a contact
+  Future<String> removeContact(String contactUid) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        return 'User not authenticated';
+      }
+
+      await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .collection('contacts')
+          .doc(contactUid)
+          .delete();
+
+      return 'success';
+    } catch (e) {
+      return 'Error removing contact: ${e.toString()}';
+    }
+  }
 }
 
 
