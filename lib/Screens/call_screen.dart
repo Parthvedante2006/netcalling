@@ -103,12 +103,15 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _startCall() async {
+    debugPrint('Starting call setup...');
     final hasPermission = await _requestMicrophonePermission();
     if (!hasPermission) {
+      debugPrint('Microphone permission denied');
       throw Exception('Microphone permission denied');
     }
 
     try {
+      debugPrint('Initializing WebRTC...');
       // Initialize WebRTC with optimized settings
       if (WebRTC.platformIsAndroid) {
         await WebRTC.initialize(options: {
@@ -180,14 +183,27 @@ class _CallScreenState extends State<CallScreen> {
         'rtcpMuxPolicy': 'require',
         'iceCandidatePoolSize': 1,
       };
+      debugPrint('Creating peer connection...');
       _peerConnection = await createPeerConnection(configuration);
 
-      // Optimized audio track handling
+      // Enhanced audio track handling
       final audioTrack = audioTracks.first;
-      await _peerConnection?.addTrack(audioTrack, _localStream!);
+      debugPrint('Adding audio track to peer connection...');
+      final rtpSender = await _peerConnection?.addTrack(audioTrack, _localStream!);
+      debugPrint('RTP Sender created: ${rtpSender != null}');
       
-      // Enable the audio track
+      // Configure audio track
       audioTrack.enabled = true;
+      try {
+        await audioTrack.applyConstraints({
+          'autoGainControl': true,
+          'echoCancellation': true,
+          'noiseSuppression': true,
+        });
+        debugPrint('Applied audio constraints to local track');
+      } catch (e) {
+        debugPrint('Warning: Could not apply audio constraints: $e');
+      }
 
       // Enhanced remote audio handling
       _peerConnection?.onTrack = (event) async {
@@ -222,21 +238,38 @@ class _CallScreenState extends State<CallScreen> {
         }
       };
 
-      // Handle ICE candidates
+      // Enhanced ICE candidate handling
       _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) async {
+        debugPrint('New ICE candidate: ${candidate.candidate != null}');
         if (candidate.candidate == null) return;
-        final collection =
-            widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
-        if (_callDocId != null) {
-          await _firestore
-              .collection('calls')
-              .doc(_callDocId)
-              .collection(collection)
-              .add({
-            'candidate': candidate.candidate,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-            'sdpMid': candidate.sdpMid,
-          });
+        
+        try {
+          final collection = widget.isIncoming ? 'calleeCandidates' : 'callerCandidates';
+          if (_callDocId != null) {
+            await _firestore
+                .collection('calls')
+                .doc(_callDocId)
+                .collection(collection)
+                .add({
+              'candidate': candidate.candidate,
+              'sdpMLineIndex': candidate.sdpMLineIndex,
+              'sdpMid': candidate.sdpMid,
+            });
+            debugPrint('ICE candidate added to Firestore');
+          }
+        } catch (e) {
+          debugPrint('Error saving ICE candidate: $e');
+        }
+      };
+
+      // Handle ICE connection state changes
+      _peerConnection?.onIceConnectionState = (state) {
+        debugPrint('ICE Connection State: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+          debugPrint('ICE Connection failed - attempting reconnection');
+          _attemptReconnection();
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+          debugPrint('ICE Connection established');
         }
       };
 
@@ -273,12 +306,15 @@ class _CallScreenState extends State<CallScreen> {
         }
       };
 
-      _callDocId =
-          widget.isIncoming ? widget.callId : _firestore.collection('calls').doc().id;
+      debugPrint('Setting up call document...');
+      _callDocId = widget.isIncoming ? widget.callId : _firestore.collection('calls').doc().id;
+      debugPrint('Call ID: $_callDocId');
 
       if (widget.isIncoming) {
+        debugPrint('Handling incoming call...');
         await _handleIncomingCall();
       } else {
+        debugPrint('Making outgoing call...');
         await _makeOutgoingCall();
       }
     } catch (e) {
@@ -294,20 +330,36 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _handleIncomingCall() async {
     try {
+      debugPrint('Handling incoming call for ID: $_callDocId');
       final callDoc = _firestore.collection('calls').doc(_callDocId);
       final callData = await callDoc.get();
-      if (!callData.exists) throw Exception('Call no longer exists');
+      if (!callData.exists) {
+        debugPrint('Call document no longer exists');
+        throw Exception('Call no longer exists');
+      }
 
       final data = callData.data()!;
       final offer = data['offer'];
-      if (offer == null) throw Exception('No offer in call');
+      if (offer == null) {
+        debugPrint('No offer found in call data');
+        throw Exception('No offer in call');
+      }
 
+      debugPrint('Setting remote description from offer...');
       await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(offer['sdp'], offer['type']));
+      debugPrint('Remote description set successfully');
 
-      final answer = await _peerConnection!.createAnswer();
+      debugPrint('Creating answer...');
+      final answer = await _peerConnection!.createAnswer({
+        'offerToReceiveAudio': true,
+        'offerToReceiveVideo': false,
+      });
+      debugPrint('Answer created, setting local description...');
       await _peerConnection!.setLocalDescription(answer);
+      debugPrint('Local description set successfully');
 
+      debugPrint('Updating call document with answer...');
       await callDoc.update({
         'answer': {'sdp': answer.sdp, 'type': answer.type},
         'state': 'answered',
@@ -342,8 +394,14 @@ class _CallScreenState extends State<CallScreen> {
       final callDoc = _firestore.collection('calls').doc(_callDocId);
       _startCallTimeout();
 
-      final offer = await _peerConnection!.createOffer();
+      debugPrint('Creating WebRTC offer...');
+      final offer = await _peerConnection!.createOffer({
+        'offerToReceiveAudio': true,
+        'offerToReceiveVideo': false,
+      });
+      debugPrint('Offer created, setting local description...');
       await _peerConnection!.setLocalDescription(offer);
+      debugPrint('Local description set successfully');
 
       final callData = {
         'callerId': widget.callerId,
@@ -744,31 +802,5 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required bool isActive,
-    required VoidCallback onPressed,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            color: isActive ? Colors.white.withAlpha(77) : Colors.transparent,
-            shape: BoxShape.circle,
-          ),
-          child: IconButton(
-            icon: Icon(icon, color: Colors.white, size: 28),
-            onPressed: onPressed,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                color: isActive ? Colors.white : Colors.white70)),
-      ],
-    );
-  }
+
 }
